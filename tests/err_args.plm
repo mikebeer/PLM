@@ -1,0 +1,8 @@
+E3: DO;
+F: PROCEDURE (X, Y) BYTE;
+   DECLARE (X, Y) BYTE;
+   RETURN X + Y;
+END F;
+DECLARE A BYTE;
+A = F(1);
+END E3;

@@ -1,0 +1,4 @@
+E1: DO;
+DECLARE A BYTE;
+A = B + 1;
+END E1;

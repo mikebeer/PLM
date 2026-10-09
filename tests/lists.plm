@@ -1,0 +1,53 @@
+/* linked lists made of BASED structures */
+LISTS: DO;
+
+DECLARE POOL(60) BYTE;          /* room for 12 nodes of 5 bytes */
+DECLARE NODE STRUCTURE (VALUE ADDRESS, NEXT ADDRESS, TAG BYTE);
+DECLARE P ADDRESS;
+DECLARE N BASED P STRUCTURE (VALUE ADDRESS, NEXT ADDRESS, TAG BYTE);
+DECLARE (HEAD, TAIL) ADDRESS;
+DECLARE FREE ADDRESS;
+DECLARE I BYTE;
+
+NEW: PROCEDURE ADDRESS;
+   DECLARE R ADDRESS;
+   R = FREE;
+   FREE = FREE + SIZE(NODE);
+   RETURN R;
+END NEW;
+
+/* add VAL at the end of the list */
+APPEND: PROCEDURE (VAL);
+   DECLARE VAL ADDRESS;
+   DECLARE Q ADDRESS;
+   DECLARE M BASED Q STRUCTURE (VALUE ADDRESS, NEXT ADDRESS, TAG BYTE);
+   Q = NEW;
+   M.VALUE = VAL;
+   M.NEXT = 0;
+   M.TAG = 1;
+   IF HEAD = 0 THEN HEAD = Q;
+   ELSE DO;
+      P = TAIL;
+      N.NEXT = Q;
+   END;
+   TAIL = Q;
+END APPEND;
+
+FREE = .POOL;
+HEAD = 0;
+DO I = 1 TO 6;
+   CALL APPEND(DOUBLE(I) * I * 100);   /* a BYTE product would wrap */
+END;
+
+/* walk the list */
+P = HEAD;
+DO WHILE P <> 0;
+   CALL PRNUM(N.VALUE);
+   CALL CO(' ');
+   P = N.NEXT;
+END;
+CALL CRLF;
+CALL PRNUM(FREE - .POOL);        /* 30 bytes used */
+CALL CRLF;
+
+END LISTS;

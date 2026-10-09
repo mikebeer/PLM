@@ -1,0 +1,6 @@
+E9: DO;
+P: PROCEDURE;
+END P;
+DECLARE A BYTE;
+A = P;
+END E9;

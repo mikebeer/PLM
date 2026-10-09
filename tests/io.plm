@@ -1,0 +1,63 @@
+/* console input and output: reads lines, converts numbers, writes through ports */
+IO: DO;
+
+DECLARE LINE(80) BYTE;
+DECLARE LEN BYTE;
+DECLARE SUM ADDRESS;
+DECLARE C BYTE;
+DECLARE CR LITERALLY '0DH', LF LITERALLY '0AH', EOF LITERALLY '1AH';
+DECLARE TRUE LITERALLY '1', FALSE LITERALLY '0';
+
+/* read a line into LINE; returns its length or 255 at the end of the input */
+READLINE: PROCEDURE BYTE;
+   DECLARE N BYTE;
+   N = 0;
+   DO WHILE TRUE;
+      C = CI;
+      IF C = EOF THEN RETURN 255;
+      IF C = LF THEN RETURN N;
+      LINE(N) = C;
+      N = N + 1;
+   END;
+   RETURN N;
+END READLINE;
+
+/* the value of the decimal digits in LINE */
+VALUE: PROCEDURE (LEN) ADDRESS;
+   DECLARE LEN BYTE;
+   DECLARE (I, D) BYTE;
+   DECLARE V ADDRESS;
+   V = 0;
+   DO I = 0 TO LEN - 1;
+      D = LINE(I) - '0';
+      IF D < 10 THEN V = V * 10 + D;
+   END;
+   RETURN V;
+END VALUE;
+
+SUM = 0;
+LEN = READLINE;
+DO WHILE LEN <> 255;
+   IF LEN > 0 THEN DO;
+      SUM = SUM + VALUE(LEN);
+      CALL PRNUM(VALUE(LEN));
+      CALL CO(' ');
+   END;
+   LEN = READLINE;
+END;
+CALL CRLF;
+CALL PRINT(.('Total: $'));
+CALL PRNUM(SUM);
+CALL CRLF;
+CALL PRHEX(SUM, 4);
+CALL CO(' ');
+CALL PRHEX(LOW(SUM));
+CALL CRLF;
+OUTPUT(1) = 'O';
+OUTPUT(1) = 'K';
+OUTPUT(1) = LF;
+OUTPUT(5) = 77;
+CALL PRNUM(INPUT(5));
+CALL CRLF;
+
+END IO;

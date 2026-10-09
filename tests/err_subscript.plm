@@ -1,0 +1,4 @@
+E7: DO;
+DECLARE T(10) BYTE;
+T = 5;
+END E7;

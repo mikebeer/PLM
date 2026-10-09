@@ -1,0 +1,5 @@
+E12: DO;
+DECLARE A BYTE;
+IF A = 0 THEN DO;
+   A = 1;
+END E12;

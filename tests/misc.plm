@@ -1,0 +1,66 @@
+/* odd corners: numbers, names with $, literals, scopes, ports, HALT */
+MISC: DO;
+
+DECLARE LOOP$COUNT BYTE, LOOPCOUNT2 BYTE;
+DECLARE TEN LITERALLY '10', TWENTY LITERALLY '(TEN + TEN)';
+DECLARE CRLF$STR(*) BYTE DATA(0DH, 0AH, '$');
+DECLARE X BYTE INITIAL(1);
+
+SHOW: PROCEDURE (N);
+   DECLARE N ADDRESS;
+   CALL PRNUM(N);
+   CALL CO(' ');
+END SHOW;
+
+/* number forms */
+CALL SHOW(0FFH);   CALL SHOW(0ffh);   CALL SHOW(1$000);
+CALL SHOW(17Q);    CALL SHOW(17O);    CALL SHOW(101$0B);
+CALL SHOW(12D);    CALL SHOW(0CH);    CALL SHOW(1000H);
+CALL CRLF;
+
+/* literals nest */
+CALL SHOW(TWENTY * 2);        /* 40 */
+CALL SHOW(TWENTY);            /* 20 */
+CALL CRLF;
+
+/* $ in a name is ignored */
+LOOP$COUNT = 5;
+CALL SHOW(LOOPCOUNT);         /* 5 */
+CALL CRLF;
+
+/* inner blocks can hide an outer name */
+DO;
+   DECLARE X BYTE;
+   X = 99;
+   CALL SHOW(X);              /* 99 */
+END;
+CALL SHOW(X);                 /* 1 */
+CALL CRLF;
+
+/* a comment with * and / and a ; inside */
+CALL SHOW(7);
+
+/* operator precedence */
+CALL SHOW(2 + 3 * 4);         /* 14 */
+CALL SHOW((2 + 3) * 4);       /* 20 */
+CALL SHOW(10 - 4 - 3);        /* 3 */
+CALL SHOW(100 / 10 / 5);      /* 2 */
+CALL SHOW(17 MOD 5 * 2);      /* 4 */
+CALL SHOW(1 + 1 = 2);         /* 255 */
+CALL SHOW(NOT 1 + 1 = 2);     /* 0 */
+CALL CRLF;
+
+/* ENABLE and DISABLE do nothing, TIME waits for nothing */
+DISABLE;
+CALL TIME(100);
+ENABLE;
+
+/* a character constant in a comparison */
+IF CRLF$STR(0) = 0DH AND CRLF$STR(2) = '$' THEN CALL SHOW(1);
+ELSE CALL SHOW(0);
+CALL CRLF;
+CALL PRINT(.CRLF$STR);
+HALT;
+CALL SHOW(5);
+
+END MISC;

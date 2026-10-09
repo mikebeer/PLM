@@ -1,0 +1,103 @@
+/* arrays, structures, BASED variables, DATA and addresses */
+DATA1: DO;
+
+DECLARE TABLE(5) BYTE INITIAL(10, 20, 30, 40, 50);
+DECLARE WORDS(4) ADDRESS DATA(1000, 2000, 3000, 4000);
+DECLARE MSG(*) BYTE DATA('PL/M', '$');
+DECLARE BUF(16) BYTE;
+DECLARE (I, J) BYTE;
+DECLARE TOTAL ADDRESS;
+
+DECLARE POINT STRUCTURE (X ADDRESS, Y ADDRESS, TAG BYTE);
+DECLARE PTS(3) STRUCTURE (X BYTE, Y BYTE, NAME(3) BYTE);
+
+DECLARE PTR ADDRESS;
+DECLARE CH BASED PTR BYTE;
+DECLARE WD BASED PTR ADDRESS;
+DECLARE ARR(4) BASED PTR BYTE;
+
+DECLARE FIXED(2) BYTE AT (4000H);
+
+PN: PROCEDURE (N);
+   DECLARE N ADDRESS;
+   CALL PRNUM(N);
+   CALL CO(' ');
+END PN;
+
+/* arrays */
+TOTAL = 0;
+DO I = 0 TO LAST(TABLE);
+   TOTAL = TOTAL + TABLE(I);
+END;
+CALL PN(TOTAL);                   /* 150 */
+CALL PN(LENGTH(TABLE));           /* 5 */
+CALL PN(LAST(WORDS));             /* 3 */
+CALL PN(SIZE(WORDS));             /* 8 */
+CALL PN(SIZE(TABLE));             /* 5 */
+CALL PN(LENGTH(MSG));             /* 5 */
+CALL PN(WORDS(2) + WORDS(1));     /* 5000 */
+CALL CRLF;
+
+/* strings are bytes */
+CALL PRINT(.MSG);
+CALL CRLF;
+CALL MOVE(LENGTH(MSG), .MSG, .BUF);
+BUF(0) = 'p';
+CALL PRINT(.BUF);
+CALL CRLF;
+DO I = 0 TO 3;
+   CALL CO(BUF(I));
+END;
+CALL CRLF;
+
+/* structures */
+POINT.X = 1000;
+POINT.Y = 2000;
+POINT.TAG = 7;
+CALL PN(POINT.X + POINT.Y);       /* 3000 */
+CALL PN(POINT.TAG);               /* 7 */
+CALL PN(SIZE(POINT));             /* 5 */
+DO I = 0 TO 2;
+   PTS(I).X = I * 10;
+   PTS(I).Y = I * 20;
+   PTS(I).NAME(0) = 'A' + I;
+   PTS(I).NAME(2) = 'Z';
+END;
+CALL PN(PTS(2).X + PTS(2).Y);     /* 60 */
+CALL CO(PTS(1).NAME(0)); CALL CO(PTS(1).NAME(2));   /* BZ */
+CALL PN(SIZE(PTS));               /* 15 */
+CALL PN(LENGTH(PTS));             /* 3 */
+CALL CRLF;
+
+/* BASED variables */
+PTR = .TABLE;
+CALL PN(CH);                      /* 10 */
+PTR = PTR + 2;
+CALL PN(CH);                      /* 30 */
+CALL PN(ARR(1));                  /* 40 */
+PTR = .WORDS;
+CALL PN(WD);                      /* 1000 */
+PTR = .WORDS(3);
+CALL PN(WD);                      /* 4000 */
+PTR = .BUF;
+WD = 0201H;
+CALL PN(BUF(0)); CALL PN(BUF(1)); /* 1 2 */
+CALL CRLF;
+
+/* addresses and MEMORY */
+CALL PN(.TABLE + 1 - .TABLE);     /* 1 */
+MEMORY(.BUF + 5) = 99;
+CALL PN(BUF(5));                  /* 99 */
+FIXED(0) = 12; FIXED(1) = 34;
+CALL PN(MEMORY(4000H) + MEMORY(4001H));   /* 46 */
+CALL PN(.FIXED);                  /* 16384 */
+CALL CRLF;
+
+/* a constant list as an address */
+PTR = .(5, 6, 7, 'AB');
+CALL PN(CH);                      /* 5 */
+PTR = PTR + 3;
+CALL PN(CH); CALL PN(ARR(1));     /* 65 66 */
+CALL CRLF;
+
+END DATA1;

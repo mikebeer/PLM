@@ -1,0 +1,113 @@
+/* control flow */
+CONTROL: DO;
+
+DECLARE (I, J, K) BYTE;
+DECLARE N ADDRESS;
+DECLARE LINE(40) BYTE;
+
+NL: PROCEDURE;
+   CALL CRLF;
+END NL;
+
+SHOW: PROCEDURE (N);
+   DECLARE N ADDRESS;
+   CALL PRNUM(N);
+   CALL CO(' ');
+END SHOW;
+
+/* iterative DO */
+DO I = 1 TO 5;
+   CALL SHOW(I);
+END;
+CALL NL;
+DO I = 0 TO 20 BY 5;
+   CALL SHOW(I);
+END;
+CALL NL;
+DO N = 1000 TO 3000 BY 1000;
+   CALL SHOW(N);
+END;
+CALL NL;
+/* the loop is skipped when the limit is below the start */
+DO I = 5 TO 4;
+   CALL SHOW(99);
+END;
+CALL SHOW(I);   /* 5 */
+CALL NL;
+/* a byte index can reach 255 without looping for ever */
+K = 0;
+DO I = 250 TO 255;
+   K = K + 1;
+END;
+CALL SHOW(K);   /* 6 */
+CALL NL;
+
+/* DO WHILE */
+I = 1;
+DO WHILE I < 100;
+   I = I * 2;
+END;
+CALL SHOW(I);   /* 128 */
+CALL NL;
+
+/* DO CASE */
+DO I = 0 TO 4;
+   DO CASE I;
+      CALL SHOW(10);
+      CALL SHOW(11);
+      DO;
+         CALL SHOW(12);
+         CALL SHOW(120);
+      END;
+      ;
+      CALL SHOW(14);
+   END;
+END;
+CALL NL;
+
+/* IF, ELSE and nesting */
+DO I = 1 TO 6;
+   IF I = 1 THEN CALL SHOW(1);
+   ELSE IF I = 2 THEN CALL SHOW(2);
+   ELSE IF I > 4 THEN DO;
+      IF I = 5 THEN CALL SHOW(5);
+      ELSE CALL SHOW(6);
+   END;
+   ELSE CALL SHOW(0);
+END;
+CALL NL;
+
+/* GO TO */
+J = 0;
+AGAIN:
+   J = J + 1;
+   IF J < 3 THEN GO TO AGAIN;
+CALL SHOW(J);   /* 3 */
+GOTO DONE;
+CALL SHOW(1000);
+DONE:
+CALL NL;
+
+/* nested loops with an exit by GO TO */
+DO I = 1 TO 5;
+   DO J = 1 TO 5;
+      IF I * J = 12 THEN GO TO FOUND;
+   END;
+END;
+FOUND:
+CALL SHOW(I); CALL SHOW(J);   /* 3 4 */
+CALL NL;
+
+/* multiple assignment and embedded assignment */
+I, J, K = 7;
+CALL SHOW(I + J + K);   /* 21 */
+CALL SHOW(I := 9);      /* 9 */
+CALL SHOW(I);           /* 9 */
+CALL NL;
+
+/* RETURN in the main program ends it */
+CALL SHOW(1);
+RETURN;
+CALL SHOW(2);
+
+END CONTROL;

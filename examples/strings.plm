@@ -1,0 +1,65 @@
+/* Strings in PL/M are byte arrays: copy, reverse, upper case and count words */
+STRINGS: DO;
+
+DECLARE TEXT(*) BYTE DATA('the quick brown fox jumps over the lazy dog', 0);
+DECLARE BUF(64) BYTE;
+DECLARE (I, LEN, WORDS, INWORD) BYTE;
+
+STRLEN: PROCEDURE (P) BYTE;
+   DECLARE P ADDRESS;
+   DECLARE CH BASED P BYTE;
+   DECLARE N BYTE;
+   N = 0;
+   DO WHILE CH <> 0;
+      N = N + 1;
+      P = P + 1;
+   END;
+   RETURN N;
+END STRLEN;
+
+UPPER: PROCEDURE (C) BYTE;
+   DECLARE C BYTE;
+   IF C >= 'a' AND C <= 'z' THEN RETURN C - 20H;
+   RETURN C;
+END UPPER;
+
+PUTS: PROCEDURE (P);
+   DECLARE P ADDRESS;
+   DECLARE CH BASED P BYTE;
+   DO WHILE CH <> 0;
+      CALL CO(CH);
+      P = P + 1;
+   END;
+   CALL CRLF;
+END PUTS;
+
+LEN = STRLEN(.TEXT);
+CALL PUTS(.TEXT);
+CALL PRNUM(LEN); CALL PRINT(.(' characters', 0DH, 0AH, '$'));
+
+/* reverse into BUF */
+DO I = 0 TO LEN - 1;
+   BUF(I) = TEXT(LEN - 1 - I);
+END;
+BUF(LEN) = 0;
+CALL PUTS(.BUF);
+
+/* upper case */
+DO I = 0 TO LEN - 1;
+   BUF(I) = UPPER(TEXT(I));
+END;
+CALL PUTS(.BUF);
+
+/* count words */
+WORDS = 0;
+INWORD = 0;
+DO I = 0 TO LEN - 1;
+   IF TEXT(I) = ' ' THEN INWORD = 0;
+   ELSE IF NOT INWORD THEN DO;
+      INWORD = 1;
+      WORDS = WORDS + 1;
+   END;
+END;
+CALL PRNUM(WORDS); CALL PRINT(.(' words', 0DH, 0AH, '$'));
+
+END STRINGS;

@@ -1,0 +1,62 @@
+/* arithmetic, types and wrap-around */
+ARITH: DO;
+
+DECLARE (B, C) BYTE;
+DECLARE (A, D) ADDRESS;
+DECLARE TRUE LITERALLY '0FFH', FALSE LITERALLY '0';
+
+PRN: PROCEDURE (N);
+   DECLARE N ADDRESS;
+   CALL PRNUM(N);
+   CALL CRLF;
+END PRN;
+
+B = 200; C = 100;
+CALL PRN(B + C);          /* BYTE + BYTE wraps: 44 */
+A = B + C;
+CALL PRN(A);              /* still 44 */
+A = B; A = A + C;
+CALL PRN(A);              /* 300 */
+CALL PRN(B - C);          /* 100 */
+CALL PRN(C - B);          /* 156 */
+D = 100 - 200;
+CALL PRN(D);              /* constant folded: 65436 */
+CALL PRN(B * 2);          /* 144 */
+A = 300;
+CALL PRN(A * 200);        /* 60000 */
+CALL PRN(A * 300);        /* 24464 (wraps at 65536) */
+CALL PRN(A / 7);          /* 42 */
+CALL PRN(A MOD 7);        /* 6 */
+CALL PRN(-1);             /* 65535 */
+B = 5;
+CALL PRN(-B);             /* 251 */
+CALL PRN(NOT B);          /* 250 */
+CALL PRN(B AND 3);        /* 1 */
+CALL PRN(B OR 8);         /* 13 */
+CALL PRN(B XOR 7);        /* 2 */
+CALL PRN(SHL(B, 3));      /* 40 */
+CALL PRN(SHL(B, 6));      /* 64 (8 bits) */
+CALL PRN(SHR(A, 2));      /* 75 */
+CALL PRN(ROL(B, 7));      /* 130 */
+CALL PRN(ROR(B, 1));      /* 130 */
+CALL PRN(HIGH(A));        /* 1 */
+CALL PRN(LOW(A));         /* 44 */
+CALL PRN(DOUBLE(B) * 100);/* 500 */
+CALL PRN(B PLUS 3);       /* 8 */
+CALL PRN(B MINUS 9);      /* 252 */
+IF B < 10 THEN CALL PRN(1); ELSE CALL PRN(0);
+IF B > 10 THEN CALL PRN(1); ELSE CALL PRN(0);
+IF B = 5 AND C = 100 THEN CALL PRN(1); ELSE CALL PRN(0);
+IF B = 5 OR C = 0 THEN CALL PRN(1); ELSE CALL PRN(0);
+IF NOT (B = 5) THEN CALL PRN(1); ELSE CALL PRN(0);
+CALL PRN(B = 5);          /* 255 */
+CALL PRN(B <> 5);         /* 0 */
+CALL PRN(TRUE AND FALSE); /* 0 */
+CALL PRN('A');            /* 65 */
+CALL PRN('AB');           /* 16706 */
+CALL PRN(0FFH + 1);       /* constant: 256 */
+CALL PRN(377Q);           /* 255 */
+CALL PRN(1010B);          /* 10 */
+CALL PRN(65535);
+
+END ARITH;

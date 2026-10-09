@@ -1,0 +1,2245 @@
+/*
+ * plm.crexx - a PL/M-80 compiler written in CREXX Level B
+ *
+ * Usage:   rxvm plm.rxbin -a program.plm [program.rxas]
+ *
+ * The compiler translates a PL/M-80 module into CREXX assembly (.rxas).
+ * The assembly is assembled with rxas and run on rxvm together with the
+ * runtime library plmrt.rxbin (see the plmc script).
+ *
+ * Machine model: the program owns a simulated memory of 65536 bytes, held
+ * in the exposed global array plmrt.mem (global g0), one byte per cell.
+ * Variables are static, as in PL/M-80: each one has a fixed address. An
+ * ADDRESS takes two cells, low byte first. Expressions are computed in
+ * registers and masked to 8 bits (BYTE) or 16 bits (ADDRESS).
+ *
+ * Procedures receive their arguments in registers and copy them into the
+ * static cells of their parameters. REENTRANT procedures have the cells of
+ * their parameters and locals saved by the caller around each call.
+ */
+options levelb
+namespace pc expose tkk tkv tkl np ti srcfile mret nmstk mn mfirst nmac mmark cm ncm cp ncp ic nic tgt nr nrbase maxr nlab ptab pidx ppid npatch sn sk sty scnt sadr sbp sst saux spid nsym scopemark nscope curlvl stsize stm0 stnm nstruct mname mty mcnt moff nmem pn plbl pres pnp pp0 preent plo phi nproc parname paradr party npar curproc pendn pendk npend usedrt lbn lbd lbl nlb lbbase rk rv rr rt rbool drb dro dty dvar memtop curline mmax clitems xb xo vcnt vesz outfile srclines source error errorat isletter isdigit addtok numval lexinto settle findmacro nexttok peek curk cur isid issym acceptid acceptsym expectid expectsym getident emit emitl curn setline newlab nreg holdreg rg asmstr writecode loadc toreg normbool mask coerce tyof setconst linkmem rdloc wrloc alloc initbytes hex2 addsym lookup pushscope popscope addbuiltin initsyms defmacro pow2 bitop rtcall elemhex constlist applyindex findmember elsize designator symdesig storeval varinfo primary addrof builtinfn shiftop callproc savecode insof isrel combine unary mulexpr addexpr relexpr notexpr andexpr orexpr expr constexpr condreg findlabel checklabels endblock blockbody statement returnstmt assignment callstmt rtproc ifstmt dostmt doblock casestmt iterdo declstmt structtype declitem procdecl compilemodule
+
+import rxfnsb
+
+arg argv = .string[]
+
+/* ---------------------------------------------------------------- tokens */
+tkk = .string[]      /* token kind: I identifier  N number  S string  Y symbol  E end  R end of macro text */
+tkv = .string[]      /* token text (identifiers upper case, numbers as decimal)                          */
+tkl = .int[]         /* token line number                                                                */
+np = 0               /* number of tokens                                                                 */
+ti = 1               /* current token                                                                    */
+srcfile = ""
+mret = .int[]        /* return points of macro expansions in progress */
+nmstk = 0
+
+/* ---------------------------------------------------------------- macros */
+mn = .string[]       /* macro name                                    */
+mfirst = .int[]      /* first token of the replacement text           */
+nmac = 0
+mmark = .int[]       /* macro count at the start of each scope        */
+
+/* ------------------------------------------------------------ code output */
+cm = .string[]       /* code of the main program                      */
+ncm = 0
+cp = .string[]       /* code of the procedures                        */
+ncp = 0
+ic = .string[]       /* initialisation code, runs first               */
+nic = 0
+tgt = 1              /* 1 = emitting main program, 2 = a procedure    */
+nr = 1               /* last allocated register                       */
+nrbase = 1           /* registers up to here are held by loops        */
+maxr = 1             /* highest register used in this procedure       */
+nlab = 0             /* label counter                                 */
+ptab = .string[]     /* patches: text to replace at the end of a procedure */
+pidx = .int[]        /* ... line index in cp                          */
+ppid = .int[]        /* ... procedure                                 */
+npatch = 0
+
+/* ----------------------------------------------------------- symbol table */
+sn = .string[]       /* name                                              */
+sk = .string[]       /* kind: V variable, P procedure, B built-in         */
+sty = .string[]      /* type: B byte, A address, S structure              */
+scnt = .int[]        /* number of elements, -1 for a scalar               */
+sadr = .int[]        /* address; for a BASED variable the offset (0)      */
+sbp = .int[]         /* BASED: address of the pointer variable, else -1   */
+sst = .int[]         /* structure type, 0 if none                         */
+saux = .string[]     /* built-in name                                     */
+spid = .int[]        /* procedure number                                  */
+nsym = 0
+scopemark = .int[]
+nscope = 0
+curlvl = 0
+
+/* -------------------------------------------------------------- structures */
+stsize = .int[]      /* size in bytes                                     */
+stm0 = .int[]        /* first member                                      */
+stnm = .int[]        /* number of members                                 */
+nstruct = 0
+mname = .string[]
+mty = .string[]
+mcnt = .int[]
+moff = .int[]
+nmem = 0
+
+/* ------------------------------------------------------------- procedures */
+pn = .string[]       /* name                                            */
+plbl = .string[]     /* assembler label                                 */
+pres = .string[]     /* result type: B, A or empty                      */
+pnp = .int[]         /* number of parameters                            */
+pp0 = .int[]         /* first parameter in the parameter table          */
+preent = .int[]      /* 1 = REENTRANT                                   */
+plo = .int[]         /* first address of the parameters and locals      */
+phi = .int[]         /* end of the parameters and locals                */
+nproc = 0
+parname = .string[]  /* parameter table                                 */
+paradr = .int[]
+party = .string[]
+npar = 0
+curproc = 0          /* procedure being compiled, 0 = main program      */
+pendn = .string[]    /* parameter names whose declaration is still to come */
+pendk = .int[]
+npend = 0
+usedrt = 0
+
+/* ----------------------------------------------------------------- labels */
+lbn = .string[]
+lbd = .int[]
+lbl = .string[]
+nlb = 0
+lbbase = 0
+
+/* ------------------------------------------------------------ expressions */
+rk = 'R'             /* result kind: C constant, R register              */
+rv = 0               /* constant value                                   */
+rr = 0               /* register                                         */
+rt = 'B'             /* type: B or A                                     */
+rbool = 0            /* 1 = register holds 0 or 1 from a comparison      */
+drb = -1             /* designator: base register, -1 for none           */
+dro = 0              /* designator: offset                               */
+dty = 'B'            /* designator: type of the element                  */
+dvar = 0             /* designator: symbol                               */
+memtop = 256         /* next free address                                */
+curline = 0
+mmax = 5             /* highest register used by the main program        */
+clitems = 0          /* number of elements in the last constant list     */
+xb = -1              /* result of applyindex: base register              */
+xo = 0               /* result of applyindex: offset                     */
+vcnt = 1             /* result of varinfo: element count                 */
+vesz = 1             /* result of varinfo: element size                  */
+
+/* ----------------------------------------------------------------- main */
+if argv.0 < 1 then do
+  say "usage: rxvm plm.rxbin -a program.plm [program.rxas]"
+  exit 1
+end
+srcfile = argv[1]
+outfile = srcfile
+if argv.0 >= 2 then outfile = argv[2]
+else do
+  p = lastpos('.', srcfile)
+  if p > 0 then outfile = left(srcfile, p - 1) || '.rxas'
+  else outfile = srcfile || '.rxas'
+end
+srclines = readlines(srcfile)
+source = ""
+do i = 1 to srclines.0
+  source = source || srclines[i] || '0a'x
+end
+call lexinto source, 1, 1
+call initsyms
+call compilemodule
+call writecode outfile
+exit 0
+
+/* --------------------------------------------------------------- errors */
+error: procedure = .void
+  arg msg = .string
+  line = curline
+  if ti >= 1 & ti <= np then line = tkl[ti]
+  say srcfile || "(" || line || "): error: " || msg
+  exit 1
+
+errorat: procedure = .void
+  arg msg = .string, line = .int
+  say srcfile || "(" || line || "): error: " || msg
+  exit 1
+
+/* --------------------------------------------------------------- lexer */
+isletter: procedure = .int
+  arg c = .string
+  if c = '' then return 0
+  if pos(c, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_?@') > 0 then return 1
+  return 0
+
+isdigit: procedure = .int
+  arg c = .string
+  if c = '' then return 0
+  if pos(c, '0123456789') > 0 then return 1
+  return 0
+
+addtok: procedure = .void
+  arg k = .string, v = .string, line = .int
+  np = np + 1
+  tkk[np] = k
+  tkv[np] = v
+  tkl[np] = line
+  return
+
+/* the value of a number token such as 0FFH, 377Q, 1010B or 99 */
+numval: procedure = .int
+  arg t = .string, line = .int
+  u = upper(t)
+  n = length(u)
+  last = substr(u, n, 1)
+  base = 10
+  body = u
+  if last = 'H' then do
+    base = 16
+    body = left(u, n - 1)
+  end
+  else if last = 'Q' | last = 'O' then do
+    base = 8
+    body = left(u, n - 1)
+  end
+  else if last = 'B' & verify(left(u, n - 1), '01') = 0 then do
+    base = 2
+    body = left(u, n - 1)
+  end
+  else if last = 'D' then body = left(u, n - 1)
+  if body = '' then call errorat "bad number '" || t || "'", line
+  v = 0
+  do i = 1 to length(body)
+    d = pos(substr(body, i, 1), '0123456789ABCDEF') - 1
+    if d < 0 | d >= base then call errorat "bad number '" || t || "'", line
+    v = v * base + d
+    if v > 65535 then call errorat "number '" || t || "' is larger than 65535", line
+  end
+  return v
+
+/* tokenize text and append the tokens; isend = 1 for the program, else a macro text */
+lexinto: procedure = .void
+  arg src = .string, ln = .int, isend = .int
+  n = length(src)
+  i = 1
+  bol = 1
+  do while i <= n
+    c = substr(src, i, 1)
+    if c = '0a'x then do
+      ln = ln + 1
+      i = i + 1
+      bol = 1
+      iterate
+    end
+    if c = ' ' | c = '09'x | c = '0d'x | c = '0c'x then do
+      i = i + 1
+      iterate
+    end
+    if c = '$' & bol = 1 & isend = 1 then do
+      /* compiler control line: ignored */
+      do while i <= n & substr(src, i, 1) <> '0a'x
+        i = i + 1
+      end
+      iterate
+    end
+    bol = 0
+    if c = '/' & substr(src, i + 1, 1) = '*' then do
+      i = i + 2
+      do while i <= n & substr(src, i, 2) <> '*/'
+        if substr(src, i, 1) = '0a'x then ln = ln + 1
+        i = i + 1
+      end
+      if i > n then call errorat "comment is not closed", ln
+      i = i + 2
+      iterate
+    end
+    if isletter(c) = 1 then do
+      j = i
+      s = ''
+      do while j <= n
+        d = substr(src, j, 1)
+        if isletter(d) = 1 | isdigit(d) = 1 then s = s || d
+        else if d <> '$' then leave
+        j = j + 1
+      end
+      call addtok 'I', upper(s), ln
+      i = j
+      iterate
+    end
+    if isdigit(c) = 1 then do
+      j = i
+      s = ''
+      do while j <= n
+        d = substr(src, j, 1)
+        if isletter(d) = 1 | isdigit(d) = 1 then s = s || d
+        else if d <> '$' then leave
+        j = j + 1
+      end
+      call addtok 'N', numval(s, ln) || '', ln
+      i = j
+      iterate
+    end
+    if c = "'" then do
+      s = ''
+      i = i + 1
+      do forever
+        if i > n then call errorat "string is not closed", ln
+        d = substr(src, i, 1)
+        if d = "'" then do
+          if substr(src, i + 1, 1) = "'" then do
+            s = s || "'"
+            i = i + 2
+          end
+          else do
+            i = i + 1
+            leave
+          end
+        end
+        else do
+          if d = '0a'x then ln = ln + 1
+          s = s || d
+          i = i + 1
+        end
+      end
+      call addtok 'S', s, ln
+      iterate
+    end
+    two = substr(src, i, 2)
+    if two = ':=' | two = '<>' | two = '<=' | two = '>=' then do
+      call addtok 'Y', two, ln
+      i = i + 2
+      iterate
+    end
+    if pos(c, '+-*/=<>().,;:') > 0 then do
+      call addtok 'Y', c, ln
+      i = i + 1
+      iterate
+    end
+    call errorat "unexpected character '" || c || "'", ln
+  end
+  if isend = 1 then call addtok 'E', '<end of file>', ln
+  else call addtok 'R', '', ln
+  return
+
+/* ------------------------------------------------------- token helpers */
+/* leave the macro expansions and enter new ones until ti is an ordinary token */
+settle: procedure = .void
+  do forever
+    if tkk[ti] = 'R' then do
+      ti = mret[nmstk]
+      nmstk = nmstk - 1
+      iterate
+    end
+    if tkk[ti] = 'I' & nmac > 0 then do
+      m = findmacro(tkv[ti])
+      if m > 0 then do
+        if nmstk >= 50 then call error "macro '" || lower(tkv[ti]) || "' is nested too deeply"
+        nmstk = nmstk + 1
+        mret[nmstk] = ti + 1
+        ti = mfirst[m]
+        iterate
+      end
+    end
+    leave
+  end
+  return
+
+findmacro: procedure = .int
+  arg nm = .string
+  do i = nmac to 1 by -1
+    if mn[i] = nm then return i
+  end
+  return 0
+
+nexttok: procedure = .void
+  if tkk[ti] <> 'E' then ti = ti + 1
+  call settle
+  return
+
+/* the token k places ahead, as kind and text joined with a tab */
+peek: procedure = .string
+  arg k = .int
+  sti = ti
+  snm = nmstk
+  smret = .int[]
+  do i = 1 to nmstk
+    smret[i] = mret[i]
+  end
+  do j = 1 to k
+    if tkk[ti] <> 'E' then ti = ti + 1
+    call settle
+  end
+  r = tkk[ti] || tkv[ti]
+  ti = sti
+  nmstk = snm
+  do i = 1 to snm
+    mret[i] = smret[i]
+  end
+  return r
+
+curk: procedure = .string
+  return tkk[ti]
+
+cur: procedure = .string
+  return tkv[ti]
+
+isid: procedure = .int
+  arg w = .string
+  if tkk[ti] = 'I' & tkv[ti] = w then return 1
+  return 0
+
+issym: procedure = .int
+  arg w = .string
+  if tkk[ti] = 'Y' & tkv[ti] = w then return 1
+  return 0
+
+acceptid: procedure = .int
+  arg w = .string
+  if isid(w) = 1 then do
+    call nexttok
+    return 1
+  end
+  return 0
+
+acceptsym: procedure = .int
+  arg w = .string
+  if issym(w) = 1 then do
+    call nexttok
+    return 1
+  end
+  return 0
+
+expectid: procedure = .void
+  arg w = .string
+  if isid(w) = 0 then call error "'" || w || "' expected, found '" || cur() || "'"
+  call nexttok
+  return
+
+expectsym: procedure = .void
+  arg w = .string
+  if issym(w) = 0 then call error "'" || w || "' expected, found '" || cur() || "'"
+  call nexttok
+  return
+
+getident: procedure = .string
+  if curk() <> 'I' then call error "identifier expected, found '" || cur() || "'"
+  s = cur()
+  call nexttok
+  return s
+
+/* ---------------------------------------------------------- code output */
+emit: procedure = .void
+  arg s = .string
+  if tgt = 1 then do
+    ncm = ncm + 1
+    cm[ncm] = '   ' || s
+  end
+  else do
+    ncp = ncp + 1
+    cp[ncp] = '   ' || s
+  end
+  return
+
+emitl: procedure = .void
+  arg s = .string
+  if tgt = 1 then do
+    ncm = ncm + 1
+    cm[ncm] = s
+  end
+  else do
+    ncp = ncp + 1
+    cp[ncp] = s
+  end
+  return
+
+/* number of lines emitted so far into the current target */
+curn: procedure = .int
+  if tgt = 1 then return ncm
+  return ncp
+
+setline: procedure = .void
+  arg idx = .int, s = .string
+  if tgt = 1 then cm[idx] = s
+  else cp[idx] = s
+  return
+
+newlab: procedure = .string
+  nlab = nlab + 1
+  return 'L' || nlab
+
+nreg: procedure = .int
+  nr = nr + 1
+  if nr > maxr then maxr = nr
+  return nr
+
+/* keep a register for the length of a loop or case: returns it */
+holdreg: procedure = .int
+  nrbase = nrbase + 1
+  nr = nrbase
+  if nr > maxr then maxr = nr
+  return nrbase
+
+rg: procedure = .string
+  arg r = .int
+  return 'r' || r
+
+/* escape text for an assembler string literal */
+asmstr: procedure = .string
+  arg s = .string
+  o = '"'
+  do i = 1 to length(s)
+    c = substr(s, i, 1)
+    k = c2d(c)
+    if c = '"' then o = o || '\"'
+    else if c = '\' then o = o || '\\'
+    else if k < 32 | k = 127 then o = o || '\x' || right(d2x(k), 2, '0')
+    else o = o || c
+  end
+  return o || '"'
+
+writecode: procedure = .void
+  arg fn = .string
+  junk = erasefile(fn)
+  call lineout fn, "/* generated by plm.crexx from" srcfile "*/"
+  call lineout fn, ".globals=1"
+  call lineout fn, "g0 .expose=plmrt.mem"
+  call lineout fn, ""
+  do i = 1 to ncp
+    call lineout fn, cp[i]
+  end
+  call lineout fn, ""
+  call lineout fn, 'main() .locals=' || (mmax + 2)
+  do i = 1 to nic
+    call lineout fn, ic[i]
+  end
+  do i = 1 to ncm
+    call lineout fn, cm[i]
+  end
+  call lineout fn, ""
+  names = 'pinit pco pci pprint pprnum prhex pcrlf pmove psave prest pflush pinput poutput phalt pexit pdivzero'
+  do i = 1 to words(names)
+    w = word(names, i)
+    call lineout fn, 'plmrt.' || w || '() .expose=plmrt.' || w
+  end
+  call lineout fn
+  return
+
+/* ------------------------------------------------------- register helpers */
+loadc: procedure = .int
+  arg v = .int
+  d = nreg()
+  call emit 'load ' || rg(d) || ',' || v
+  return d
+
+/* put the current result into a register */
+toreg: procedure = .void
+  if rk = 'C' then do
+    rr = loadc(rv)
+    rk = 'R'
+  end
+  return
+
+/* turn a comparison result 0/1 into the PL/M truth value 0/255 */
+normbool: procedure = .void
+  if rbool = 1 then do
+    d = nreg()
+    call emit 'imult ' || rg(d) || ',' || rg(rr) || ',255'
+    rr = d
+    rbool = 0
+    rt = 'B'
+  end
+  return
+
+/* mask a value to the width of type t */
+mask: procedure = .int
+  arg v = .int, t = .string
+  m = 65536
+  if t = 'B' then m = 256
+  v = v % m
+  if v < 0 then v = v + m
+  return v
+
+/* convert the current result to type t */
+coerce: procedure = .void
+  arg t = .string
+  call normbool
+  if rk = 'C' then do
+    rv = mask(rv, t)
+    if t = 'B' then rt = 'B'
+    else rt = tyof(rv)
+    return
+  end
+  if t = 'B' & rt = 'A' then do
+    d = nreg()
+    call emit 'iand ' || rg(d) || ',' || rg(rr) || ',255'
+    rr = d
+  end
+  rt = t
+  return
+
+tyof: procedure = .string
+  arg v = .int
+  if v > 255 then return 'A'
+  return 'B'
+
+/* set the current result to the constant v */
+setconst: procedure = .void
+  arg v = .int
+  rk = 'C'
+  rv = v
+  rt = tyof(v)
+  rbool = 0
+  return
+
+/* ------------------------------------------------------------------ memory */
+linkmem: procedure = .void
+  arg base = .int, off = .int
+  /* address a is element a + 1 of the array */
+  if base = -1 then call emit 'minlinkattr1 r1,g0,' || (off + 1)
+  else call emit 'minlinkattr1 r1,g0,' || rg(base) || ',' || (off + 1)
+  return
+
+/* read a byte or an address at base+off into a new register */
+rdloc: procedure = .int
+  arg t = .string, base = .int, off = .int
+  d = nreg()
+  call linkmem base, off
+  call emit 'igetunlink ' || rg(d) || ',r1'
+  if t = 'A' then do
+    e = nreg()
+    call linkmem base, off + 1
+    call emit 'igetunlink ' || rg(e) || ',r1'
+    call emit 'ishl ' || rg(e) || ',' || rg(e) || ',8'
+    call emit 'ior ' || rg(d) || ',' || rg(d) || ',' || rg(e)
+  end
+  return d
+
+/* store register v of type vt into a location of type t */
+wrloc: procedure = .void
+  arg t = .string, base = .int, off = .int, v = .int
+  if t = 'B' then do
+    call linkmem base, off
+    call emit 'isetunlink r1,' || rg(v)
+    return
+  end
+  lo = nreg()
+  call emit 'iand ' || rg(lo) || ',' || rg(v) || ',255'
+  call linkmem base, off
+  call emit 'isetunlink r1,' || rg(lo)
+  hi = nreg()
+  call emit 'ishr ' || rg(hi) || ',' || rg(v) || ',8'
+  call linkmem base, off + 1
+  call emit 'isetunlink r1,' || rg(hi)
+  return
+
+/* allocate n bytes of memory */
+alloc: procedure = .int
+  arg n = .int
+  a = memtop
+  memtop = memtop + n
+  if memtop > 65536 then call error "out of memory: the program needs more than 64K"
+  return a
+
+/* put the bytes of hex text at addr when the program starts */
+initbytes: procedure = .void
+  arg addr = .int, hex = .string
+  if hex = '' then return
+  nic = nic + 1
+  ic[nic] = '   load r2,' || addr
+  nic = nic + 1
+  ic[nic] = '   load r3,"' || hex || '"'
+  nic = nic + 1
+  ic[nic] = '   call2 r4,plmrt.pinit(),r2,r3'
+  return
+
+hex2: procedure = .string
+  arg v = .int
+  return right(d2x(v), 2, '0')
+
+/* ----------------------------------------------------------- symbol table */
+addsym: procedure = .int
+  arg nm = .string, k = .string, t = .string, cnt = .int, adr = .int
+  lo = 1
+  if nscope > 0 then lo = scopemark[nscope] + 1
+  do i = nsym to lo by -1
+    if sn[i] = nm then call error "'" || lower(nm) || "' is already declared"
+  end
+  nsym = nsym + 1
+  sn[nsym] = nm
+  sk[nsym] = k
+  sty[nsym] = t
+  scnt[nsym] = cnt
+  sadr[nsym] = adr
+  sbp[nsym] = -1
+  sst[nsym] = 0
+  saux[nsym] = ''
+  spid[nsym] = 0
+  return nsym
+
+lookup: procedure = .int
+  arg nm = .string
+  do i = nsym to 1 by -1
+    if sn[i] = nm then return i
+  end
+  return 0
+
+pushscope: procedure = .void
+  nscope = nscope + 1
+  scopemark[nscope] = nsym
+  mmark[nscope] = nmac
+  return
+
+popscope: procedure = .void
+  nsym = scopemark[nscope]
+  nmac = mmark[nscope]
+  nscope = nscope - 1
+  return
+
+addbuiltin: procedure = .void
+  arg nm = .string, aux = .string
+  k = addsym(nm, 'B', 'B', -1, 0)
+  saux[k] = aux
+  return
+
+initsyms: procedure = .void
+  /* MEMORY: the whole address space as a byte array */
+  k = addsym('MEMORY', 'V', 'B', 65536, 0)
+  names = 'LENGTH LAST SIZE SHL SHR ROL ROR HIGH LOW DOUBLE INPUT OUTPUT CI CO PRINT PRNUM PRHEX CRLF MOVE TIME EXIT'
+  do i = 1 to words(names)
+    w = word(names, i)
+    call addbuiltin w, w
+  end
+  names = 'CARRY ZERO SIGN PARITY SCL SCR DEC STACKPTR'
+  do i = 1 to words(names)
+    w = word(names, i)
+    call addbuiltin w, 'UNSUPPORTED'
+  end
+  return
+
+/* define the macro nm with the replacement text txt */
+defmacro: procedure = .void
+  arg nm = .string, txt = .string
+  first = np + 1
+  call lexinto txt, tkl[ti], 0
+  nmac = nmac + 1
+  mn[nmac] = nm
+  mfirst[nmac] = first
+  return
+
+/* ----------------------------------------------------- compile time maths */
+pow2: procedure = .int
+  arg n = .int
+  if n >= 17 then return 131072
+  p = 1
+  do j = 1 to n
+    p = p * 2
+  end
+  return p
+
+/* bitwise operation on 16 bit values: op is AND, OR or XOR */
+bitop: procedure = .int
+  arg op = .string, a = .int, b = .int
+  r = 0
+  p = 1
+  do i = 0 to 15
+    x = (a / p) % 2
+    y = (b / p) % 2
+    z = 0
+    if op = 'AND' then do
+      if x = 1 & y = 1 then z = 1
+    end
+    else if op = 'OR' then do
+      if x = 1 | y = 1 then z = 1
+    end
+    else do
+      if x <> y then z = 1
+    end
+    r = r + z * p
+    p = p * 2
+  end
+  return r
+
+/* ------------------------------------------------------- run time calls */
+/* call plmrt.fn with na register arguments; the result is in a new register */
+rtcall: procedure = .int
+  arg fn = .string, na = .int, a1 = .int, a2 = .int, a3 = .int
+  r = nreg()
+  if na = 0 then s = 'call ' || rg(r) || ',plmrt.' || fn || '()'
+  else s = 'call' || na || ' ' || rg(r) || ',plmrt.' || fn || '()'
+  if na >= 1 then s = s || ',' || rg(a1)
+  if na >= 2 then s = s || ',' || rg(a2)
+  if na >= 3 then s = s || ',' || rg(a3)
+  call emit s
+  return r
+
+/* ---------------------------------------------------------- constant text */
+elemhex: procedure = .string
+  arg v = .int, et = .string
+  if et = 'A' then return hex2(v % 256) || hex2(v / 256)
+  if et = 'B' then return hex2(v % 256)
+  if v > 255 then return hex2(v % 256) || hex2(v / 256)
+  return hex2(v)
+
+/* ( item, item, ... ): numbers and strings, as hex text for pinit */
+constlist: procedure = .string
+  arg et = .string
+  call expectsym '('
+  hx = ''
+  clitems = 0
+  do forever
+    done = 0
+    if curk() = 'S' then do
+      pk = peek(1)
+      if pk = 'Y,' | pk = 'Y)' then do
+        s = cur()
+        call nexttok
+        do i = 1 to length(s)
+          hx = hx || elemhex(c2d(substr(s, i, 1)), et)
+          clitems = clitems + 1
+        end
+        done = 1
+      end
+    end
+    if done = 0 then do
+      call expr
+      if rk <> 'C' then call error "constant expected in the list"
+      hx = hx || elemhex(rv, et)
+      clitems = clitems + 1
+    end
+    if acceptsym(',') = 0 then leave
+  end
+  call expectsym ')'
+  return hx
+
+/* ------------------------------------------------------------ designators */
+/* add the index in the current result to the address (b, o) with element size esz */
+applyindex: procedure = .void
+  arg b = .int, o = .int, esz = .int
+  if rk = 'C' then do
+    xb = b
+    xo = o + rv * esz
+    return
+  end
+  call normbool
+  idx = rr
+  if esz > 1 then do
+    t = nreg()
+    call emit 'imult ' || rg(t) || ',' || rg(idx) || ',' || esz
+    idx = t
+  end
+  if b = -1 then xb = idx
+  else do
+    nb = nreg()
+    call emit 'iadd ' || rg(nb) || ',' || rg(b) || ',' || rg(idx)
+    xb = nb
+  end
+  xo = o
+  return
+
+findmember: procedure = .int
+  arg stp = .int, nm = .string
+  do i = stm0[stp] to stm0[stp] + stnm[stp] - 1
+    if mname[i] = nm then return i
+  end
+  return 0
+
+elsize: procedure = .int
+  arg t = .string, stp = .int
+  if t = 'S' then return stsize[stp]
+  if t = 'A' then return 2
+  return 1
+
+/* variable at the current token: leaves the location in drb, dro, dty.
+   ctx = 1: address context, a missing subscript or member means the start */
+designator: procedure = .void
+  arg ctx = .int
+  nm = cur()
+  x = lookup(nm)
+  if x = 0 then call error "'" || lower(nm) || "' is not declared"
+  if sk[x] <> 'V' then call error "'" || lower(nm) || "' is not a variable"
+  call nexttok
+  b = -1
+  o = sadr[x]
+  if sbp[x] >= 0 then b = rdloc('A', -1, sbp[x])
+  t = sty[x]
+  stp = sst[x]
+  if scnt[x] >= 0 then do
+    if issym('(') then do
+      call nexttok
+      call expr
+      call expectsym ')'
+      call applyindex b, o, elsize(t, stp)
+      b = xb
+      o = xo
+    end
+    else if ctx = 0 then call error "'" || lower(nm) || "' is an array and needs a subscript"
+  end
+  if t = 'S' then do
+    if issym('.') then do
+      call nexttok
+      mnm = getident()
+      m = findmember(stp, mnm)
+      if m = 0 then call error "'" || lower(mnm) || "' is not a member of '" || lower(nm) || "'"
+      o = o + moff[m]
+      t = mty[m]
+      if mcnt[m] >= 0 then do
+        if issym('(') then do
+          call nexttok
+          call expr
+          call expectsym ')'
+          call applyindex b, o, elsize(t, 0)
+          b = xb
+          o = xo
+        end
+        else if ctx = 0 then call error "member '" || lower(mnm) || "' is an array and needs a subscript"
+      end
+    end
+    else if ctx = 0 then call error "'" || lower(nm) || "' is a structure and needs a member"
+    else t = 'B'
+  end
+  drb = b
+  dro = o
+  dty = t
+  dvar = x
+  return
+
+/* the location of a scalar variable, from its symbol alone */
+symdesig: procedure = .void
+  arg x = .int
+  b = -1
+  if sbp[x] >= 0 then b = rdloc('A', -1, sbp[x])
+  drb = b
+  dro = sadr[x]
+  dty = sty[x]
+  dvar = x
+  return
+
+/* store the current result into the location (b, o) of type t */
+storeval: procedure = .void
+  arg t = .string, b = .int, o = .int
+  if rk = 'C' then do
+    r = loadc(mask(rv, t))
+    call wrloc t, b, o, r
+    return
+  end
+  call normbool
+  r = rr
+  if t = 'B' & rt = 'A' then do
+    r = nreg()
+    call emit 'iand ' || rg(r) || ',' || rg(rr) || ',255'
+  end
+  call wrloc t, b, o, r
+  return
+
+/* name, optional member: element count and size, for LENGTH, LAST and SIZE */
+varinfo: procedure = .void
+  call expectsym '('
+  nm = cur()
+  x = lookup(nm)
+  if x = 0 then call error "'" || lower(nm) || "' is not declared"
+  if sk[x] <> 'V' then call error "'" || lower(nm) || "' is not a variable"
+  call nexttok
+  vcnt = 1
+  if scnt[x] >= 0 then vcnt = scnt[x]
+  vesz = elsize(sty[x], sst[x])
+  if sty[x] = 'S' & issym('.') then do
+    call nexttok
+    mnm = getident()
+    m = findmember(sst[x], mnm)
+    if m = 0 then call error "'" || lower(mnm) || "' is not a member of '" || lower(nm) || "'"
+    vcnt = 1
+    if mcnt[m] >= 0 then vcnt = mcnt[m]
+    vesz = elsize(mty[m], 0)
+  end
+  call expectsym ')'
+  return
+
+/* -------------------------------------------------------------- primary */
+primary: procedure = .void
+  k = curk()
+  rbool = 0
+  if k = 'N' then do
+    call setconst cur()
+    call nexttok
+    return
+  end
+  if k = 'S' then do
+    s = cur()
+    n = length(s)
+    if n = 1 then call setconst c2d(s)
+    else if n = 2 then call setconst c2d(left(s, 1)) * 256 + c2d(right(s, 1))
+    else call error "a string of more than two characters can only appear in a list or after a '.'"
+    call nexttok
+    return
+  end
+  if issym('(') then do
+    call nexttok
+    call expr
+    call expectsym ')'
+    return
+  end
+  if issym('.') then do
+    call nexttok
+    call addrof
+    return
+  end
+  if k = 'I' then do
+    nm = cur()
+    x = lookup(nm)
+    if x = 0 then call error "'" || lower(nm) || "' is not declared"
+    if sk[x] = 'V' then do
+      call designator 0
+      b = drb
+      o = dro
+      t = dty
+      if issym(':=') then do
+        call nexttok
+        call expr
+        call coerce t
+        call toreg
+        call storeval t, b, o
+        rt = t
+        return
+      end
+      rr = rdloc(t, b, o)
+      rk = 'R'
+      rt = t
+      rbool = 0
+      return
+    end
+    if sk[x] = 'P' then do
+      call nexttok
+      call callproc x
+      if pres[spid[x]] = '' then call error "procedure '" || lower(nm) || "' has no value"
+      return
+    end
+    if sk[x] = 'B' then do
+      call nexttok
+      call builtinfn saux[x], nm
+      return
+    end
+  end
+  call error "expression expected, found '" || cur() || "'"
+  return
+
+/* the address of a variable, or of a list of constants */
+addrof: procedure = .void
+  if issym('(') then do
+    hx = constlist('?')
+    n = length(hx) / 2
+    a = alloc(n)
+    call initbytes a, hx
+    call setconst a
+    rt = 'A'
+    return
+  end
+  if curk() = 'S' then do
+    s = cur()
+    call nexttok
+    hx = ''
+    do i = 1 to length(s)
+      hx = hx || hex2(c2d(substr(s, i, 1)))
+    end
+    a = alloc(length(s))
+    call initbytes a, hx
+    call setconst a
+    rt = 'A'
+    return
+  end
+  if curk() <> 'I' then call error "variable expected after '.'"
+  call designator 1
+  if drb = -1 then call setconst dro
+  else do
+    if dro = 0 then rr = drb
+    else do
+      rr = nreg()
+      call emit 'iadd ' || rg(rr) || ',' || rg(drb) || ',' || dro
+    end
+    rk = 'R'
+  end
+  rt = 'A'
+  rbool = 0
+  return
+
+/* built-in function in an expression; the name has been read */
+builtinfn: procedure = .void
+  arg aux = .string, nm = .string
+  if aux = 'LENGTH' | aux = 'LAST' | aux = 'SIZE' then do
+    call varinfo
+    if aux = 'LENGTH' then call setconst vcnt
+    else if aux = 'LAST' then call setconst vcnt - 1
+    else call setconst vcnt * vesz
+    return
+  end
+  if aux = 'SHL' | aux = 'SHR' | aux = 'ROL' | aux = 'ROR' then do
+    call expectsym '('
+    call expr
+    call normbool
+    lk = rk
+    lv = rv
+    lr = rr
+    lt = rt
+    call expectsym ','
+    call expr
+    call normbool
+    call expectsym ')'
+    call shiftop aux, lk, lv, lr, lt
+    return
+  end
+  if aux = 'HIGH' | aux = 'LOW' | aux = 'DOUBLE' then do
+    call expectsym '('
+    call expr
+    call expectsym ')'
+    call normbool
+    if aux = 'DOUBLE' then do
+      rt = 'A'
+      return
+    end
+    if rk = 'C' then do
+      if aux = 'HIGH' then rv = rv / 256
+      else rv = rv % 256
+      rt = 'B'
+      return
+    end
+    d = nreg()
+    if aux = 'HIGH' then call emit 'ishr ' || rg(d) || ',' || rg(rr) || ',8'
+    else call emit 'iand ' || rg(d) || ',' || rg(rr) || ',255'
+    rr = d
+    rt = 'B'
+    return
+  end
+  if aux = 'CI' then do
+    if issym('(') then do
+      call nexttok
+      call expectsym ')'
+    end
+    rr = rtcall('pci', 0, 0, 0, 0)
+    rk = 'R'
+    rt = 'B'
+    rbool = 0
+    return
+  end
+  if aux = 'INPUT' then do
+    call expectsym '('
+    call expr
+    call coerce 'B'
+    call toreg
+    call expectsym ')'
+    rr = rtcall('pinput', 1, rr, 0, 0)
+    rk = 'R'
+    rt = 'B'
+    rbool = 0
+    return
+  end
+  if aux = 'UNSUPPORTED' then call error "'" || lower(nm) || "' is not supported by this compiler"
+  call error "'" || lower(nm) || "' is a procedure and has no value"
+  return
+
+/* SHL SHR ROL ROR of the left operand (kept in lk lv lr lt) by the current result */
+shiftop: procedure = .void
+  arg op = .string, lk = .string, lv = .int, lr = .int, lt = .string
+  w = 16
+  if lt = 'B' then w = 8
+  m = 65535
+  if lt = 'B' then m = 255
+  if lk = 'C' & rk = 'C' then do
+    n = rv
+    if op = 'SHL' then v = (lv * pow2(n)) % (m + 1)
+    else if op = 'SHR' then v = lv / pow2(n)
+    else do
+      n = n % w
+      if op = 'ROR' then n = (w - n) % w
+      if n = 0 then v = lv
+      else v = (lv * pow2(n)) % (m + 1) + lv / pow2(w - n)
+    end
+    call setconst v
+    rt = lt
+    return
+  end
+  if lk = 'C' then lr = loadc(lv)
+  d = nreg()
+  if op = 'SHL' | op = 'SHR' then do
+    ins = 'ishl'
+    if op = 'SHR' then ins = 'ishr'
+    if rk = 'C' then call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rv
+    else call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rg(rr)
+    if op = 'SHL' then call emit 'iand ' || rg(d) || ',' || rg(d) || ',' || m
+    rr = d
+    rk = 'R'
+    rt = lt
+    return
+  end
+  /* rotate: ((x << n) | (x >> (w - n))) & m, with n taken modulo w */
+  call toreg
+  n1 = nreg()
+  call emit 'imod ' || rg(n1) || ',' || rg(rr) || ',' || w
+  if op = 'ROR' then do
+    n2 = nreg()
+    call emit 'isub ' || rg(n2) || ',' || w || ',' || rg(n1)
+    call emit 'imod ' || rg(n1) || ',' || rg(n2) || ',' || w
+  end
+  a = nreg()
+  call emit 'ishl ' || rg(a) || ',' || rg(lr) || ',' || rg(n1)
+  c = nreg()
+  call emit 'isub ' || rg(c) || ',' || w || ',' || rg(n1)
+  e = nreg()
+  call emit 'ishr ' || rg(e) || ',' || rg(lr) || ',' || rg(c)
+  call emit 'ior ' || rg(d) || ',' || rg(a) || ',' || rg(e)
+  call emit 'iand ' || rg(d) || ',' || rg(d) || ',' || m
+  rr = d
+  rk = 'R'
+  rt = lt
+  return
+
+/* ---------------------------------------------------- procedure calls */
+/* the procedure x has been read; the arguments follow */
+callproc: procedure = .void
+  arg x = .int
+  pid = spid[x]
+  n = pnp[pid]
+  areg = .int[]
+  if n > 0 then do
+    call expectsym '('
+    do i = 1 to n
+      if i > 1 then do
+        if issym(',') = 0 then call error "too few arguments in the call of '" || lower(pn[pid]) || "'"
+        call nexttok
+      end
+      call expr
+      p = pp0[pid] + i - 1
+      call coerce party[p]
+      call toreg
+      areg[i] = rr
+    end
+    if issym(',') = 1 then call error "too many arguments in the call of '" || lower(pn[pid]) || "'"
+    call expectsym ')'
+  end
+  else if issym('(') = 1 then do
+    call nexttok
+    call expectsym ')'
+  end
+  if preent[pid] = 1 then call savecode pid, 'psave'
+  do i = 1 to n
+    p = pp0[pid] + i - 1
+    call wrloc party[p], -1, paradr[p], areg[i]
+  end
+  if pres[pid] = '' then do
+    call emit 'call ' || plbl[pid] || '()'
+    rk = 'R'
+    rr = 0
+    rt = 'B'
+  end
+  else do
+    d = nreg()
+    call emit 'call ' || rg(d) || ',' || plbl[pid] || '()'
+    rk = 'R'
+    rr = d
+    rt = pres[pid]
+  end
+  rbool = 0
+  if preent[pid] = 1 then call savecode pid, 'prest'
+  return
+
+/* psave or prest for the cells of a REENTRANT procedure */
+savecode: procedure = .void
+  arg pid = .int, fn = .string
+  a = loadc(plo[pid])
+  b = nreg()
+  if curproc = pid then do
+    call emit 'load ' || rg(b) || ',0'
+    npatch = npatch + 1
+    ptab[npatch] = '   load ' || rg(b) || ','
+    pidx[npatch] = curn()
+    ppid[npatch] = pid
+  end
+  else call emit 'load ' || rg(b) || ',' || (phi[pid] - plo[pid])
+  c = nreg()
+  call emit 'call2 ' || rg(c) || ',plmrt.' || fn || '(),' || rg(a) || ',' || rg(b)
+  return
+
+/* ------------------------------------------------------------ operators */
+insof: procedure = .string
+  arg op = .string
+  if op = '+' then return 'iadd'
+  if op = '-' then return 'isub'
+  if op = '*' then return 'imult'
+  if op = '/' then return 'idiv'
+  if op = 'MOD' then return 'imod'
+  if op = 'AND' then return 'iand'
+  if op = 'OR' then return 'ior'
+  if op = 'XOR' then return 'ixor'
+  if op = '=' then return 'ieq'
+  if op = '<>' then return 'ine'
+  if op = '<' then return 'ilt'
+  if op = '<=' then return 'ilte'
+  if op = '>' then return 'igt'
+  return 'igte'
+
+isrel: procedure = .int
+  arg op = .string
+  if op = '=' | op = '<>' | op = '<' | op = '<=' | op = '>' | op = '>=' then return 1
+  return 0
+
+/* combine the left operand (arguments) with the current result, which is the right operand */
+combine: procedure = .void
+  arg op = .string, lk = .string, lv = .int, lr = .int, lt = .string, lb = .int
+  rkk = rk
+  rvv = rv
+  rrr = rr
+  rtt = rt
+  rbb = rbool
+  ins = insof(op)
+  if (op = 'AND' | op = 'OR' | op = 'XOR') & lb = 1 & rbb = 1 then do
+    d = nreg()
+    call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rg(rrr)
+    rk = 'R'
+    rr = d
+    rt = 'B'
+    rbool = 1
+    return
+  end
+  if lb = 1 then do
+    d = nreg()
+    call emit 'imult ' || rg(d) || ',' || rg(lr) || ',255'
+    lr = d
+    lt = 'B'
+  end
+  if rbb = 1 then do
+    d = nreg()
+    call emit 'imult ' || rg(d) || ',' || rg(rrr) || ',255'
+    rrr = d
+    rtt = 'B'
+  end
+  rbool = 0
+  restype = 'B'
+  if lt = 'A' | rtt = 'A' then restype = 'A'
+  if lk = 'C' & rkk = 'C' then do
+    a = lv
+    b = rvv
+    if op = '+' then v = a + b
+    else if op = '-' then v = a - b
+    else if op = '*' then v = a * b
+    else if op = '/' then do
+      if b = 0 then call error "division by zero in a constant expression"
+      v = a / b
+    end
+    else if op = 'MOD' then do
+      if b = 0 then call error "division by zero in a constant expression"
+      v = a % b
+    end
+    else if op = 'AND' | op = 'OR' | op = 'XOR' then v = bitop(op, a, b)
+    else do
+      v = 0
+      if op = '=' & a = b then v = 255
+      if op = '<>' & a <> b then v = 255
+      if op = '<' & a < b then v = 255
+      if op = '<=' & a <= b then v = 255
+      if op = '>' & a > b then v = 255
+      if op = '>=' & a >= b then v = 255
+    end
+    call setconst mask(v, 'A')
+    return
+  end
+  if (op = '/' | op = 'MOD') & rkk = 'C' & rvv = 0 then call error "division by zero"
+  if (op = '/' | op = 'MOD') & rkk = 'R' then do
+    /* a zero divisor stops the program with a message */
+    zt = nreg()
+    zl = newlab()
+    call emit 'ine ' || rg(zt) || ',' || rg(rrr) || ',0'
+    call emit 'brt ' || zl || ',' || rg(zt)
+    call emit 'call plmrt.pdivzero()'
+    call emitl zl || ':'
+  end
+  d = nreg()
+  if rkk = 'C' then do
+    if lk = 'C' then lr = loadc(lv)
+    call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rvv
+  end
+  else if lk = 'C' then do
+    if ins = 'iadd' | ins = 'imult' | ins = 'iand' | ins = 'ior' | ins = 'ixor' | ins = 'ieq' | ins = 'ine' then call emit ins || ' ' || rg(d) || ',' || rg(rrr) || ',' || lv
+    else if ins = 'isub' | ins = 'idiv' | ins = 'imod' | ins = 'ilt' | ins = 'ilte' | ins = 'igt' | ins = 'igte' then call emit ins || ' ' || rg(d) || ',' || lv || ',' || rg(rrr)
+    else do
+      lr = loadc(lv)
+      call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rg(rrr)
+    end
+  end
+  else call emit ins || ' ' || rg(d) || ',' || rg(lr) || ',' || rg(rrr)
+  rk = 'R'
+  rr = d
+  if isrel(op) = 1 then do
+    rt = 'B'
+    rbool = 1
+    return
+  end
+  rt = restype
+  if op = '+' | op = '-' | op = '*' then do
+    m = 255
+    if restype = 'A' then m = 65535
+    call emit 'iand ' || rg(d) || ',' || rg(d) || ',' || m
+  end
+  return
+
+unary: procedure = .void
+  if issym('-') = 1 then do
+    call nexttok
+    call primary
+    call normbool
+    if rk = 'C' then do
+      call setconst mask(0 - rv, 'A')
+      return
+    end
+    d = nreg()
+    call emit 'isub ' || rg(d) || ',0,' || rg(rr)
+    m = 255
+    if rt = 'A' then m = 65535
+    call emit 'iand ' || rg(d) || ',' || rg(d) || ',' || m
+    rr = d
+    return
+  end
+  if issym('+') = 1 then do
+    call nexttok
+    call primary
+    call normbool
+    return
+  end
+  call primary
+  return
+
+mulexpr: procedure = .void
+  call unary
+  do forever
+    op = ''
+    if issym('*') = 1 then op = '*'
+    else if issym('/') = 1 then op = '/'
+    else if isid('MOD') = 1 then op = 'MOD'
+    else leave
+    call nexttok
+    lk = rk
+    lv = rv
+    lr = rr
+    lt = rt
+    lb = rbool
+    call unary
+    call combine op, lk, lv, lr, lt, lb
+  end
+  return
+
+addexpr: procedure = .void
+  call mulexpr
+  do forever
+    op = ''
+    if issym('+') = 1 | isid('PLUS') = 1 then op = '+'
+    else if issym('-') = 1 | isid('MINUS') = 1 then op = '-'
+    else leave
+    call nexttok
+    lk = rk
+    lv = rv
+    lr = rr
+    lt = rt
+    lb = rbool
+    call mulexpr
+    call combine op, lk, lv, lr, lt, lb
+  end
+  return
+
+relexpr: procedure = .void
+  call addexpr
+  op = ''
+  if issym('=') = 1 then op = '='
+  else if issym('<>') = 1 then op = '<>'
+  else if issym('<') = 1 then op = '<'
+  else if issym('<=') = 1 then op = '<='
+  else if issym('>') = 1 then op = '>'
+  else if issym('>=') = 1 then op = '>='
+  if op = '' then return
+  call nexttok
+  lk = rk
+  lv = rv
+  lr = rr
+  lt = rt
+  lb = rbool
+  call addexpr
+  call combine op, lk, lv, lr, lt, lb
+  return
+
+notexpr: procedure = .void
+  if isid('NOT') = 0 then do
+    call relexpr
+    return
+  end
+  call nexttok
+  call notexpr
+  if rk = 'C' then do
+    m = 255
+    if rt = 'A' then m = 65535
+    call setconst bitop('XOR', rv, m)
+    return
+  end
+  d = nreg()
+  if rbool = 1 then call emit 'ixor ' || rg(d) || ',' || rg(rr) || ',1'
+  else do
+    m = 255
+    if rt = 'A' then m = 65535
+    call emit 'ixor ' || rg(d) || ',' || rg(rr) || ',' || m
+  end
+  rr = d
+  return
+
+andexpr: procedure = .void
+  call notexpr
+  do while isid('AND') = 1
+    call nexttok
+    lk = rk
+    lv = rv
+    lr = rr
+    lt = rt
+    lb = rbool
+    call notexpr
+    call combine 'AND', lk, lv, lr, lt, lb
+  end
+  return
+
+orexpr: procedure = .void
+  call andexpr
+  do forever
+    op = ''
+    if isid('OR') = 1 then op = 'OR'
+    else if isid('XOR') = 1 then op = 'XOR'
+    else leave
+    call nexttok
+    lk = rk
+    lv = rv
+    lr = rr
+    lt = rt
+    lb = rbool
+    call andexpr
+    call combine op, lk, lv, lr, lt, lb
+  end
+  return
+
+expr: procedure = .void
+  call orexpr
+  return
+
+constexpr: procedure = .int
+  call expr
+  if rk <> 'C' then call error "constant expression expected"
+  return rv
+
+/* a register that is zero when the condition is false */
+condreg: procedure = .int
+  call expr
+  if rk = 'C' then return loadc(rv % 2)
+  if rbool = 1 then return rr
+  d = nreg()
+  call emit 'iand ' || rg(d) || ',' || rg(rr) || ',1'
+  return d
+
+/* ------------------------------------------------------------------ labels */
+findlabel: procedure = .int
+  arg nm = .string
+  do i = lbbase + 1 to nlb
+    if lbn[i] = nm then return i
+  end
+  nlb = nlb + 1
+  lbn[nlb] = nm
+  lbd[nlb] = 0
+  lbl[nlb] = newlab()
+  return nlb
+
+checklabels: procedure = .void
+  do i = lbbase + 1 to nlb
+    if lbd[i] = 0 then call error "label '" || lower(lbn[i]) || "' is used but not defined"
+  end
+  return
+
+/* ------------------------------------------------------------- statements */
+/* END, an optional label, and the semicolon */
+endblock: procedure = .void
+  call expectid 'END'
+  if curk() = 'I' then call nexttok
+  call expectsym ';'
+  return
+
+/* statements and declarations up to the END of the block */
+blockbody: procedure = .void
+  do while isid('END') = 0
+    if curk() = 'E' then call error "END expected before the end of the file"
+    if isid('DECLARE') = 1 then call declstmt
+    else if curk() = 'I' & peek(1) = 'Y:' & peek(2) = 'IPROCEDURE' then call procdecl
+    else call statement
+  end
+  return
+
+statement: procedure = .void
+  nr = nrbase
+  curline = tkl[ti]
+  if curk() = 'I' & peek(1) = 'Y:' then do
+    nm = cur()
+    call nexttok
+    call nexttok
+    k = findlabel(nm)
+    if lbd[k] = 1 then call error "label '" || lower(nm) || "' is defined twice"
+    lbd[k] = 1
+    call emitl lbl[k] || ':'
+    if isid('END') = 1 then return
+    call statement
+    return
+  end
+  if issym(';') = 1 then do
+    call nexttok
+    return
+  end
+  if isid('IF') = 1 then do
+    call ifstmt
+    return
+  end
+  if isid('DO') = 1 then do
+    call dostmt
+    return
+  end
+  if isid('CALL') = 1 then do
+    call nexttok
+    call callstmt
+    call expectsym ';'
+    return
+  end
+  if isid('RETURN') = 1 then do
+    call nexttok
+    call returnstmt
+    call expectsym ';'
+    return
+  end
+  if isid('GOTO') = 1 | isid('GO') = 1 then do
+    if isid('GO') = 1 then do
+      call nexttok
+      call expectid 'TO'
+    end
+    else call nexttok
+    nm = getident()
+    k = findlabel(nm)
+    call emit 'br ' || lbl[k]
+    call expectsym ';'
+    return
+  end
+  if isid('HALT') = 1 then do
+    call nexttok
+    call emit 'call plmrt.phalt()'
+    call expectsym ';'
+    return
+  end
+  if isid('ENABLE') = 1 | isid('DISABLE') = 1 then do
+    call nexttok
+    call expectsym ';'
+    return
+  end
+  if curk() = 'I' then do
+    call assignment
+    call expectsym ';'
+    return
+  end
+  call error "statement expected, found '" || cur() || "'"
+  return
+
+returnstmt: procedure = .void
+  if issym(';') = 1 then do
+    if curproc > 0 then do
+      if pres[curproc] <> '' then call error "a function must return a value"
+      call emit 'ret'
+    end
+    else do
+      call emit 'call plmrt.pflush()'
+      call emit 'ret'
+    end
+    return
+  end
+  if curproc = 0 | pres[curproc] = '' then call error "this procedure has no value to return"
+  call expr
+  call coerce pres[curproc]
+  call toreg
+  call emit 'ret ' || rg(rr)
+  return
+
+assignment: procedure = .void
+  nm = cur()
+  x = lookup(nm)
+  if x > 0 then do
+    if sk[x] = 'B' & saux[x] = 'OUTPUT' then do
+      call nexttok
+      call expectsym '('
+      call expr
+      call coerce 'B'
+      call toreg
+      call expectsym ')'
+      port = holdreg()
+      call emit 'icopy ' || rg(port) || ',' || rg(rr)
+      call expectsym '='
+      call expr
+      call coerce 'B'
+      call toreg
+      r = rtcall('poutput', 2, port, rr, 0)
+      nrbase = nrbase - 1
+      return
+    end
+  end
+  tbase = .int[]
+  toff = .int[]
+  ttyp = .string[]
+  nt = 0
+  do forever
+    call designator 0
+    nt = nt + 1
+    tbase[nt] = drb
+    toff[nt] = dro
+    ttyp[nt] = dty
+    if acceptsym(',') = 0 then leave
+    if curk() <> 'I' then call error "variable expected after ','"
+  end
+  call expectsym '='
+  call expr
+  call toreg
+  call normbool
+  do i = 1 to nt
+    call storeval ttyp[i], tbase[i], toff[i]
+  end
+  return
+
+callstmt: procedure = .void
+  nm = cur()
+  x = lookup(nm)
+  if x = 0 then call error "'" || lower(nm) || "' is not declared"
+  call nexttok
+  if sk[x] = 'P' then do
+    call callproc x
+    return
+  end
+  if sk[x] <> 'B' then call error "'" || lower(nm) || "' is not a procedure"
+  aux = saux[x]
+  if aux = 'CO' then call rtproc 'pco', 1, 'B'
+  else if aux = 'PRINT' then call rtproc 'pprint', 1, 'A'
+  else if aux = 'PRNUM' then call rtproc 'pprnum', 1, 'A'
+  else if aux = 'CRLF' then call rtproc 'pcrlf', 0, ''
+  else if aux = 'MOVE' then call rtproc 'pmove', 3, 'AAA'
+  else if aux = 'EXIT' then call rtproc 'pexit', 1, 'B'
+  else if aux = 'TIME' then do
+    call expectsym '('
+    call expr
+    call expectsym ')'
+  end
+  else if aux = 'PRHEX' then do
+    wr2 = 0
+    call expectsym '('
+    call expr
+    w = 2
+    if rt = 'A' then w = 4
+    call coerce 'A'
+    call toreg
+    v = rr
+    if acceptsym(',') = 1 then do
+      call expr
+      call coerce 'B'
+      call toreg
+      w = -1
+      wr2 = rr
+    end
+    call expectsym ')'
+    if w >= 0 then wr2 = loadc(w)
+    r = rtcall('prhex', 2, v, wr2, 0)
+  end
+  else if aux = 'UNSUPPORTED' then call error "'" || lower(nm) || "' is not supported by this compiler"
+  else call error "'" || lower(nm) || "' is a function; use it in an expression"
+  return
+
+/* call plmrt.fn with na arguments of the given types */
+rtproc: procedure = .void
+  arg fn = .string, na = .int, types = .string
+  ar = .int[]
+  if na > 0 then do
+    call expectsym '('
+    do i = 1 to na
+      if i > 1 then call expectsym ','
+      call expr
+      call coerce substr(types, i, 1)
+      call toreg
+      ar[i] = rr
+    end
+    call expectsym ')'
+  end
+  else if issym('(') = 1 then do
+    call nexttok
+    call expectsym ')'
+  end
+  if na < 3 then ar[3] = 0
+  if na < 2 then ar[2] = 0
+  if na < 1 then ar[1] = 0
+  r = rtcall(fn, na, ar[1], ar[2], ar[3])
+  return
+
+ifstmt: procedure = .void
+  call nexttok
+  r = condreg()
+  call expectid 'THEN'
+  lelse = newlab()
+  call emit 'brf ' || lelse || ',' || rg(r)
+  call statement
+  if isid('ELSE') = 1 then do
+    call nexttok
+    lend = newlab()
+    call emit 'br ' || lend
+    call emitl lelse || ':'
+    call statement
+    call emitl lend || ':'
+  end
+  else call emitl lelse || ':'
+  return
+
+dostmt: procedure = .void
+  call nexttok
+  if issym(';') = 1 then do
+    call nexttok
+    call doblock
+    return
+  end
+  if isid('WHILE') = 1 then do
+    call nexttok
+    ltop = newlab()
+    lend = newlab()
+    call emitl ltop || ':'
+    r = condreg()
+    call expectsym ';'
+    call emit 'brf ' || lend || ',' || rg(r)
+    call blockbody
+    call endblock
+    call emit 'br ' || ltop
+    call emitl lend || ':'
+    return
+  end
+  if isid('CASE') = 1 then do
+    call casestmt
+    return
+  end
+  if curk() = 'I' then do
+    call iterdo
+    return
+  end
+  call error "';', WHILE, CASE or a variable expected after DO"
+  return
+
+/* DO; ... END; */
+doblock: procedure = .void
+  call pushscope
+  call blockbody
+  call popscope
+  call endblock
+  return
+
+casestmt: procedure = .void
+  call nexttok
+  call expr
+  call toreg
+  call normbool
+  svbase = nrbase
+  h = holdreg()
+  call emit 'icopy ' || rg(h) || ',' || rg(rr)
+  call expectsym ';'
+  ldisp = newlab()
+  lend = newlab()
+  call emit 'br ' || ldisp
+  cl = .string[]
+  n = 0
+  do while isid('END') = 0
+    if curk() = 'E' then call error "END expected before the end of the file"
+    n = n + 1
+    cl[n] = newlab()
+    call emitl cl[n] || ':'
+    call statement
+    call emit 'br ' || lend
+  end
+  call emitl ldisp || ':'
+  nr = nrbase
+  t = nreg()
+  do j = 1 to n
+    call emit 'ieq ' || rg(t) || ',' || rg(h) || ',' || (j - 1)
+    call emit 'brt ' || cl[j] || ',' || rg(t)
+  end
+  call emitl lend || ':'
+  call endblock
+  nrbase = svbase
+  nr = nrbase
+  return
+
+/* DO var = start TO limit [BY step]; ... END; */
+iterdo: procedure = .void
+  nm = cur()
+  x = lookup(nm)
+  if x = 0 then call error "'" || lower(nm) || "' is not declared"
+  if sk[x] <> 'V' | scnt[x] >= 0 | sty[x] = 'S' then call error "'" || lower(nm) || "' cannot be the index of a DO loop"
+  call nexttok
+  call expectsym '='
+  call expr
+  call toreg
+  call symdesig x
+  call storeval sty[x], drb, dro
+  call expectid 'TO'
+  svbase = nrbase
+  hl = holdreg()
+  call expr
+  call toreg
+  call normbool
+  call emit 'icopy ' || rg(hl) || ',' || rg(rr)
+  stepc = 1
+  hs = 0
+  if isid('BY') = 1 then do
+    call nexttok
+    call expr
+    if rk = 'C' then stepc = rv
+    else do
+      call toreg
+      call normbool
+      stepc = -1
+      hs = holdreg()
+      call emit 'icopy ' || rg(hs) || ',' || rg(rr)
+    end
+  end
+  call expectsym ';'
+  lbody = newlab()
+  lend = newlab()
+  nr = nrbase
+  call symdesig x
+  v = rdloc(sty[x], drb, dro)
+  t = nreg()
+  call emit 'ilte ' || rg(t) || ',' || rg(v) || ',' || rg(hl)
+  call emit 'brf ' || lend || ',' || rg(t)
+  call emitl lbody || ':'
+  call blockbody
+  call expectid 'END'
+  if curk() = 'I' then call nexttok
+  nr = nrbase
+  call symdesig x
+  v = rdloc(sty[x], drb, dro)
+  n2 = nreg()
+  if stepc >= 0 then call emit 'iadd ' || rg(n2) || ',' || rg(v) || ',' || stepc
+  else call emit 'iadd ' || rg(n2) || ',' || rg(v) || ',' || rg(hs)
+  rk = 'R'
+  rr = n2
+  rt = 'A'
+  rbool = 0
+  b2 = drb
+  o2 = dro
+  call storeval sty[x], b2, o2
+  t2 = nreg()
+  call emit 'ilte ' || rg(t2) || ',' || rg(n2) || ',' || rg(hl)
+  call emit 'brt ' || lbody || ',' || rg(t2)
+  call emitl lend || ':'
+  call expectsym ';'
+  nrbase = svbase
+  nr = nrbase
+  return
+
+/* ----------------------------------------------------------- declarations */
+declstmt: procedure = .void
+  call nexttok
+  do forever
+    call declitem
+    if acceptsym(',') = 0 then leave
+  end
+  call expectsym ';'
+  return
+
+/* STRUCTURE ( member, ... ): returns the structure type number */
+structtype: procedure = .int
+  call nexttok
+  call expectsym '('
+  nstruct = nstruct + 1
+  id = nstruct
+  stm0[id] = nmem + 1
+  off = 0
+  cnt = 0
+  do forever
+    nmem = nmem + 1
+    mname[nmem] = getident()
+    mcnt[nmem] = -1
+    if issym('(') = 1 then do
+      call nexttok
+      n = constexpr()
+      if n < 1 then call error "bad dimension"
+      mcnt[nmem] = n
+      call expectsym ')'
+    end
+    if isid('BYTE') = 1 then mty[nmem] = 'B'
+    else if isid('ADDRESS') = 1 then mty[nmem] = 'A'
+    else call error "BYTE or ADDRESS expected for a structure member"
+    call nexttok
+    moff[nmem] = off
+    sz = elsize(mty[nmem], 0)
+    if mcnt[nmem] >= 0 then sz = sz * mcnt[nmem]
+    off = off + sz
+    cnt = cnt + 1
+    if acceptsym(',') = 0 then leave
+  end
+  call expectsym ')'
+  stsize[id] = off
+  stnm[id] = cnt
+  return id
+
+declitem: procedure = .void
+  names = .string[]
+  nn = 0
+  if issym('(') = 1 then do
+    call nexttok
+    do forever
+      nn = nn + 1
+      names[nn] = getident()
+      if acceptsym(',') = 0 then leave
+    end
+    call expectsym ')'
+  end
+  else do
+    nn = 1
+    names[1] = getident()
+  end
+  dim = -1
+  if issym('(') = 1 then do
+    call nexttok
+    if issym('*') = 1 then do
+      call nexttok
+      dim = -2
+    end
+    else do
+      dim = constexpr()
+      if dim < 1 then call error "bad dimension"
+    end
+    call expectsym ')'
+  end
+  ty = ''
+  stp = 0
+  bptr = -1
+  atad = -1
+  hx = ''
+  hasinit = 0
+  nitems = 0
+  do forever
+    if isid('LITERALLY') = 1 then do
+      if nn <> 1 | dim <> -1 then call error "LITERALLY applies to a single name"
+      call nexttok
+      if curk() <> 'S' then call error "a string is expected after LITERALLY"
+      call defmacro names[1], cur()
+      call nexttok
+      return
+    end
+    if isid('BYTE') = 1 then do
+      ty = 'B'
+      call nexttok
+    end
+    else if isid('ADDRESS') = 1 then do
+      ty = 'A'
+      call nexttok
+    end
+    else if isid('STRUCTURE') = 1 then do
+      stp = structtype()
+      ty = 'S'
+    end
+    else if isid('LABEL') = 1 then do
+      ty = 'L'
+      call nexttok
+    end
+    else if isid('BASED') = 1 then do
+      call nexttok
+      pnm = getident()
+      px = lookup(pnm)
+      if px = 0 then call error "'" || lower(pnm) || "' is not declared"
+      if sk[px] <> 'V' then call error "'" || lower(pnm) || "' is not a variable"
+      if sbp[px] >= 0 then call error "the pointer of a BASED variable cannot itself be BASED"
+      bptr = sadr[px]
+      if sty[px] = 'S' then do
+        call expectsym '.'
+        mnm = getident()
+        m = findmember(sst[px], mnm)
+        if m = 0 then call error "'" || lower(mnm) || "' is not a member of '" || lower(pnm) || "'"
+        if mty[m] <> 'A' then call error "the pointer of a BASED variable must be an ADDRESS"
+        bptr = bptr + moff[m]
+      end
+      else if sty[px] <> 'A' then call error "the pointer of a BASED variable must be an ADDRESS"
+    end
+    else if isid('AT') = 1 then do
+      call nexttok
+      call expectsym '('
+      atad = constexpr()
+      call expectsym ')'
+    end
+    else if isid('INITIAL') = 1 | isid('DATA') = 1 then do
+      call nexttok
+      et = ty
+      if et = '' | et = 'S' then et = 'B'
+      hx = constlist(et)
+      nitems = clitems
+      hasinit = 1
+    end
+    else if isid('PUBLIC') = 1 then call nexttok
+    else if isid('EXTERNAL') = 1 then call error "EXTERNAL is not supported"
+    else leave
+  end
+  if ty = 'L' then return
+  if ty = '' then call error "a type (BYTE, ADDRESS or STRUCTURE) is expected"
+  cnt = dim
+  if dim = -2 then do
+    if hasinit = 0 then call error "a dimension of * needs INITIAL or DATA"
+    cnt = nitems
+  end
+  if hasinit = 1 & ty = 'S' then call error "INITIAL for structures is not supported"
+  if hasinit = 1 & bptr >= 0 then call error "a BASED variable cannot have an initial value"
+  esz = elsize(ty, stp)
+  total = esz
+  if cnt >= 0 then total = esz * cnt
+  if atad >= 0 & nn > 1 then call error "AT applies to a single name"
+  do i = 1 to nn
+    if bptr >= 0 then adr = 0
+    else if atad >= 0 then adr = atad
+    else adr = alloc(total)
+    x = addsym(names[i], 'V', ty, cnt, adr)
+    sbp[x] = bptr
+    sst[x] = stp
+    /* a parameter of the procedure being declared */
+    do j = 1 to npend
+      if pendn[j] = names[i] then do
+        if cnt >= 0 | ty = 'S' | bptr >= 0 then call error "parameter '" || lower(names[i]) || "' must be a BYTE or an ADDRESS"
+        q = pp0[curproc] + pendk[j] - 1
+        paradr[q] = adr
+        party[q] = ty
+        pendn[j] = ''
+      end
+    end
+    if hasinit = 1 then do
+      if cnt >= 0 & nitems > cnt then call error "too many initial values for '" || lower(names[i]) || "'"
+      if cnt < 0 & length(hx) > esz * 2 then call error "too many initial values for '" || lower(names[i]) || "'"
+      call initbytes adr, hx
+    end
+  end
+  return
+
+/* --------------------------------------------------------------- procedures */
+procdecl: procedure = .void
+  if curproc > 0 then call error "procedures cannot be nested"
+  nm = getident()
+  call expectsym ':'
+  call expectid 'PROCEDURE'
+  p0 = npar + 1
+  cnt = 0
+  npend = 0
+  if issym('(') = 1 then do
+    call nexttok
+    do forever
+      cnt = cnt + 1
+      npar = npar + 1
+      parname[npar] = getident()
+      paradr[npar] = 0
+      party[npar] = 'B'
+      npend = npend + 1
+      pendn[npend] = parname[npar]
+      pendk[npend] = cnt
+      if acceptsym(',') = 0 then leave
+    end
+    call expectsym ')'
+  end
+  res = ''
+  if isid('BYTE') = 1 then do
+    res = 'B'
+    call nexttok
+  end
+  else if isid('ADDRESS') = 1 then do
+    res = 'A'
+    call nexttok
+  end
+  reent = 0
+  do forever
+    if isid('PUBLIC') = 1 then call nexttok
+    else if isid('REENTRANT') = 1 then do
+      reent = 1
+      call nexttok
+    end
+    else if isid('INTERRUPT') = 1 then do
+      call nexttok
+      junk = constexpr()
+    end
+    else if isid('EXTERNAL') = 1 then call error "EXTERNAL procedures are not supported"
+    else leave
+  end
+  call expectsym ';'
+  nproc = nproc + 1
+  pid = nproc
+  pn[pid] = nm
+  plbl[pid] = 'P' || pid || '_' || nm
+  pres[pid] = res
+  pnp[pid] = cnt
+  pp0[pid] = p0
+  preent[pid] = reent
+  plo[pid] = memtop
+  phi[pid] = memtop
+  x = addsym(nm, 'P', res, -1, 0)
+  spid[x] = pid
+  /* switch to the code of the procedure */
+  svnr = nr
+  svbase = nrbase
+  svmax = maxr
+  svnlb = nlb
+  svlbbase = lbbase
+  svline = curline
+  tgt = 2
+  nr = 1
+  nrbase = 1
+  maxr = 1
+  curproc = pid
+  lbbase = nlb
+  call pushscope
+  call emitl plbl[pid] || '() .locals=0'
+  hdr = ncp
+  call blockbody
+  call popscope
+  call expectid 'END'
+  if curk() = 'I' then call nexttok
+  call expectsym ';'
+  do j = 1 to npend
+    if pendn[j] <> '' then call errorat "parameter '" || lower(pendn[j]) || "' of '" || lower(nm) || "' is not declared", svline
+  end
+  npend = 0
+  call checklabels
+  if res = '' then call emit 'ret'
+  else call emit 'ret 0'
+  call setline hdr, plbl[pid] || '() .locals=' || (maxr + 2)
+  phi[pid] = memtop
+  do k = 1 to npatch
+    if ppid[k] = pid then cp[pidx[k]] = ptab[k] || (phi[pid] - plo[pid])
+  end
+  npatch = 0
+  tgt = 1
+  nr = svnr
+  nrbase = svbase
+  maxr = svmax
+  curproc = 0
+  nlb = svnlb
+  lbbase = svlbbase
+  return
+
+/* ----------------------------------------------------------------- module */
+compilemodule: procedure = .void
+  ti = 1
+  call settle
+  modname = getident()
+  call expectsym ':'
+  call expectid 'DO'
+  call expectsym ';'
+  call pushscope
+  call blockbody
+  call popscope
+  call expectid 'END'
+  if curk() = 'I' & isid('EOF') = 0 then call nexttok
+  call expectsym ';'
+  if isid('EOF') = 1 then call nexttok
+  if curk() <> 'E' then call error "text after the end of the module"
+  call checklabels
+  call emit 'call plmrt.pflush()'
+  call emit 'ret'
+  mmax = maxr
+  if mmax < 5 then mmax = 5
+  return

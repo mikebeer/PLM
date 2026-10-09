@@ -1,0 +1,14 @@
+/* Hello, world in PL/M-80 */
+HELLO: DO;
+
+DECLARE MSG(*) BYTE DATA('Hello, world!', 0DH, 0AH, '$');
+DECLARE I BYTE;
+
+CALL PRINT(.MSG);
+DO I = 1 TO 5;
+   CALL PRNUM(I);
+   CALL CO(' ');
+END;
+CALL CRLF;
+
+END HELLO;

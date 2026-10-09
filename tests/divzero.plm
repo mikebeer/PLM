@@ -1,0 +1,12 @@
+/* a division by zero stops the program with a message */
+DIVZERO: DO;
+DECLARE (A, B) BYTE;
+A = 10;
+B = 0;
+CALL PRNUM(A / 2);
+CALL CRLF;
+CALL PRNUM(A MOD 3);
+CALL CRLF;
+CALL PRNUM(A / B);
+CALL PRNUM(1);
+END DIVZERO;

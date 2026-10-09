@@ -1,0 +1,160 @@
+/*
+ * plmrt.crexx - runtime library for programs compiled by plm.crexx
+ *
+ * The compiled program and this module share the simulated memory `mem`
+ * as an exposed global: one cell per byte, 65536 cells, each holding 0..255.
+ * Everything that the compiler does not express in a few instructions lives
+ * here: console input and output, MOVE, the save area for REENTRANT
+ * procedures and the I/O ports.
+ */
+options levelb
+namespace plmrt expose mem stk ssp obuf ibuf ihave ieof ports pinit pco pci pprint pprnum prhex pcrlf pmove psave prest pflush pinput poutput phalt pexit pstkovf pdivzero
+
+import rxfnsb
+
+mem = .int[]           /* simulated memory, one byte per cell: address a is mem[a + 1] */
+stk = .int[]           /* save area for REENTRANT procedures   */
+ssp = 0                /* number of cells used in stk          */
+obuf = ''              /* console output, written at each line end */
+ibuf = ''              /* unread part of the current input line   */
+ihave = 0              /* 1 = ibuf holds a line being read        */
+ieof = 0
+ports = .int[]         /* I/O ports 0..255                        */
+
+/* store a table of bytes, given as hex digits, at addr */
+pinit: procedure = .void
+  arg addr = .int, hex = .string
+  n = length(hex) / 2
+  do i = 0 to n - 1
+    mem[addr + i + 1] = x2d(substr(hex, i * 2 + 1, 2))
+  end
+  return
+
+/* ------------------------------------------------------------ console */
+pflush: procedure = .void
+  if obuf <> '' then do
+    call charout 'stdout', obuf
+    obuf = ''
+  end
+  return
+
+/* write one byte to the console; a line feed ends the line */
+pco: procedure = .void
+  arg c = .int
+  if c = 10 then do
+    say obuf
+    obuf = ''
+  end
+  else if c <> 13 & c <> 7 & c <> 0 then obuf = obuf || d2c(c)
+  return
+
+pcrlf: procedure = .void
+  say obuf
+  obuf = ''
+  return
+
+/* print the string at addr, up to the $ that ends it (as in CP/M) */
+pprint: procedure = .void
+  arg addr = .int
+  do forever
+    c = mem[addr + 1]
+    if c = 36 then leave
+    call pco c
+    addr = addr + 1
+    if addr > 65535 then leave
+  end
+  return
+
+/* print an unsigned number */
+pprnum: procedure = .void
+  arg n = .int
+  obuf = obuf || n
+  return
+
+/* print a number as hexadecimal digits, width digits at least */
+prhex: procedure = .void
+  arg n = .int, w = .int
+  obuf = obuf || right(d2x(n), w, '0')
+  return
+
+ensureline: procedure = .void
+  if ihave = 1 then return
+  if lines() = 0 then do
+    ieof = 1
+    return
+  end
+  ibuf = linein()
+  ihave = 1
+  return
+
+/* read one character from the console; a line end is 10, the end of input is 26 */
+pci: procedure = .int
+  call pflush
+  call ensureline
+  if ieof = 1 then return 26
+  if ibuf = '' then do
+    ihave = 0
+    return 10
+  end
+  c = c2d(left(ibuf, 1))
+  ibuf = substr(ibuf, 2)
+  return c
+
+/* ------------------------------------------------------------- memory */
+/* copy n bytes upward from src to dst */
+pmove: procedure = .void
+  arg n = .int, src = .int, dst = .int
+  do i = 0 to n - 1
+    mem[(dst + i) % 65536 + 1] = mem[(src + i) % 65536 + 1]
+  end
+  return
+
+/* save n bytes at lo before a REENTRANT procedure is entered again */
+psave: procedure = .void
+  arg lo = .int, n = .int
+  do i = 0 to n - 1
+    stk[ssp + i + 1] = mem[lo + i + 1]
+  end
+  ssp = ssp + n
+  if ssp > 4000000 then call pstkovf
+  return
+
+prest: procedure = .void
+  arg lo = .int, n = .int
+  ssp = ssp - n
+  do i = 0 to n - 1
+    mem[lo + i + 1] = stk[ssp + i + 1]
+  end
+  return
+
+pstkovf: procedure = .void
+  call pflush
+  say "runtime error: stack overflow"
+  exit 202
+
+/* ------------------------------------------------------------ I/O ports */
+/* port 1 is the console: INPUT(1) reads a character, OUTPUT(1) writes one */
+pinput: procedure = .int
+  arg p = .int
+  if p = 1 then return pci()
+  return ports[p]
+
+poutput: procedure = .void
+  arg p = .int, v = .int
+  if p = 1 then call pco v
+  else ports[p] = v
+  return
+
+phalt: procedure = .void
+  call pflush
+  exit 0
+
+pexit: procedure = .void
+  arg code = .int
+  call pflush
+  exit code
+
+pdivzero: procedure = .void
+  call pflush
+  say "runtime error: division by zero"
+  exit 203

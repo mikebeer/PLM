@@ -1,0 +1,4 @@
+E6: DO;
+DECLARE A ADDRESS;
+A = 'abc';
+END E6;

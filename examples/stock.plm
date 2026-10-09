@@ -1,0 +1,41 @@
+/* A small stock list kept in an array of structures */
+STOCK: DO;
+
+DECLARE ITEMS(6) STRUCTURE (NAME(8) BYTE, QTY ADDRESS, PRICE ADDRESS);
+DECLARE NAMES(*) BYTE DATA('bolts   nuts    washers screws  nails   rivets  ');
+DECLARE QTYS(6) ADDRESS DATA(120, 80, 0, 2500, 40, 15);
+DECLARE PRICES(6) ADDRESS DATA(25, 10, 5, 3, 9, 40);
+DECLARE (I, J) BYTE;
+DECLARE TOTAL ADDRESS;
+
+/* the value of the stock in cents, split over a running total */
+VALUE: PROCEDURE (N) ADDRESS;
+   DECLARE N BYTE;
+   RETURN ITEMS(N).QTY * ITEMS(N).PRICE;
+END VALUE;
+
+DO I = 0 TO 5;
+   DO J = 0 TO 7;
+      ITEMS(I).NAME(J) = NAMES(I * 8 + J);
+   END;
+   ITEMS(I).QTY = QTYS(I);
+   ITEMS(I).PRICE = PRICES(I);
+END;
+
+TOTAL = 0;
+DO I = 0 TO 5;
+   DO J = 0 TO 7;
+      CALL CO(ITEMS(I).NAME(J));
+   END;
+   CALL PRNUM(ITEMS(I).QTY);
+   CALL CO(' ');
+   CALL PRNUM(VALUE(I));
+   IF ITEMS(I).QTY = 0 THEN CALL PRINT(.(' SOLD OUT$'));
+   CALL CRLF;
+   TOTAL = TOTAL + VALUE(I);
+END;
+CALL PRINT(.('total value: $'));
+CALL PRNUM(TOTAL);
+CALL CRLF;
+
+END STOCK;

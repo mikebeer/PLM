@@ -1,0 +1,30 @@
+/* The sieve of Eratosthenes: all primes below 2000 */
+SIEVE: DO;
+
+DECLARE LIMIT LITERALLY '2000';
+DECLARE FLAGS(LIMIT) BYTE;
+DECLARE (I, J, COUNT) ADDRESS;
+DECLARE TRUE LITERALLY '1', FALSE LITERALLY '0';
+
+DO I = 0 TO LIMIT - 1;
+   FLAGS(I) = TRUE;
+END;
+
+COUNT = 0;
+DO I = 2 TO LIMIT - 1;
+   IF FLAGS(I) THEN DO;
+      COUNT = COUNT + 1;
+      IF COUNT <= 20 THEN DO;
+         CALL PRNUM(I);
+         CALL CO(' ');
+      END;
+      DO J = I + I TO LIMIT - 1 BY I;
+         FLAGS(J) = FALSE;
+      END;
+   END;
+END;
+CALL CRLF;
+CALL PRNUM(COUNT);
+CALL PRINT(.(' primes below 2000', 0DH, 0AH, '$'));
+
+END SIEVE;

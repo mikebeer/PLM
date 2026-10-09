@@ -1,0 +1,6 @@
+E8: DO;
+P: PROCEDURE;
+   Q: PROCEDURE;
+   END Q;
+END P;
+END E8;

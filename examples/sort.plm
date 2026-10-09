@@ -1,0 +1,55 @@
+/* Sorting an array of words with a bubble sort and then searching it */
+SORT: DO;
+
+DECLARE N LITERALLY '12';
+DECLARE DATA1(N) ADDRESS INITIAL(512, 7, 3000, 42, 9, 65535, 0, 18, 256, 1024, 5, 77);
+DECLARE (I, J) BYTE;
+DECLARE T ADDRESS;
+DECLARE SWAPPED BYTE;
+
+PRINTALL: PROCEDURE;
+   DECLARE I BYTE;
+   DO I = 0 TO N - 1;
+      CALL PRNUM(DATA1(I));
+      CALL CO(' ');
+   END;
+   CALL CRLF;
+END PRINTALL;
+
+/* binary search: the index of KEY, or 255 if it is not there */
+FIND: PROCEDURE (KEY) BYTE;
+   DECLARE KEY ADDRESS;
+   DECLARE (LO, HI, MID) BYTE;
+   LO = 0;
+   HI = N - 1;
+   DO WHILE LO <= HI;
+      MID = SHR(LO + HI, 1);
+      IF DATA1(MID) = KEY THEN RETURN MID;
+      IF DATA1(MID) < KEY THEN LO = MID + 1;
+      ELSE DO;
+         IF MID = 0 THEN RETURN 255;
+         HI = MID - 1;
+      END;
+   END;
+   RETURN 255;
+END FIND;
+
+CALL PRINTALL;
+SWAPPED = 1;
+DO WHILE SWAPPED;
+   SWAPPED = 0;
+   DO I = 1 TO N - 1;
+      IF DATA1(I - 1) > DATA1(I) THEN DO;
+         T = DATA1(I - 1);
+         DATA1(I - 1) = DATA1(I);
+         DATA1(I) = T;
+         SWAPPED = 1;
+      END;
+   END;
+END;
+CALL PRINTALL;
+CALL PRNUM(FIND(3000)); CALL CRLF;
+CALL PRNUM(FIND(18)); CALL CRLF;
+CALL PRNUM(FIND(19)); CALL CRLF;
+
+END SORT;
