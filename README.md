@@ -37,5 +37,12 @@ nested procedures, `INITIAL` for structures.
 
 ## Manual
 
-See [docs/PLM-User-Guide.docx](docs/PLM-User-Guide.docx): language, built-in procedures,
+See [docs/PLM-User-Guide.docx](docs/PLM-User-Guide.docx) (34 pages): language, built-in procedures,
 examples, how the compiler works, messages, restrictions.
+
+## Layout
+
+    plm.crexx     the compiler            plmrt.crexx   the run time library
+    plmc          compile and run         Makefile      build and test
+    examples/     example programs        tests/        tests with expected output
+    docs/         user manual
