@@ -4,8 +4,9 @@
 # Programs that do not compile have the compiler messages as their expected output.
 #   tests/run.sh            run all tests
 #   tests/run.sh --update   rewrite the .out files from the current output
+#   PLMC=c/plmc-c tests/run.sh   test the C89 version instead
 HERE=$(cd "$(dirname "$0")" && pwd)
-PLMC="$HERE/../plmc"
+PLMC="${PLMC:-$HERE/../plmc}"
 cd "$HERE"
 pass=0; fail=0
 for src in *.plm; do

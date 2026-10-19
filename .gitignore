@@ -2,3 +2,5 @@ build/
 *.rxas
 *.rxbin
 *.log
+c/*.o
+c/plmc-c

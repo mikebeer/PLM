@@ -1,0 +1,22 @@
+/* console input: upper case the text, count the characters */
+T3: DO;
+DECLARE C BYTE, N ADDRESS;
+N = 0;
+DO WHILE 1;
+  C = CI;
+  IF C = 26 THEN GOTO DONE;
+  IF C = 10 THEN DO;
+    CALL PRNUM(N); CALL CRLF; N = 0;
+  END;
+  ELSE DO;
+    N = N + 1;
+    IF C >= 'a' AND C <= 'z' THEN C = C - 32;
+    CALL CO(C);
+  END;
+END;
+DONE: CALL PRNUM(N); CALL CRLF;
+OUTPUT(5) = 99; OUTPUT(1) = 'Z'; CALL CRLF;
+CALL PRNUM(INPUT(5)); CALL PRNUM(INPUT(6)); CALL PRNUM(INPUT(1));
+CALL CRLF;
+CALL EXIT(7);
+END T3;

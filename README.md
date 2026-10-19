@@ -35,6 +35,25 @@ procedures: `CO(char)`, `CI` (a function), `PRINT(.string)` (ends at `$`), `PRNU
 Not supported: `CARRY ZERO SIGN PARITY SCL SCR DEC STACKPTR`, `EXTERNAL` procedures,
 nested procedures, `INITIAL` for structures.
 
+## The C89 version
+
+`c/` holds the same compiler and run time library in strict portable C89
+(it also builds with GCC on VM/370 CMS). It is one program, `plmc-c`, that
+compiles the PL/M source into a register code and runs it at once, so it
+needs no cREXX at all:
+
+    make c                     # builds c/plmc-c
+    c/plmc-c hello.plm         # compile and run
+    c/plmc-c -c hello.plm      # compile only (check the program)
+    make test-c                # tests/ with the C version
+
+The simulated 64 KB machine, the 8 and 16 bit wrap-around, the messages and
+the output are the same as with `./plmc`. Differences: a stack of more than
+400000 nested calls ends with `runtime error: stack overflow` (the cREXX
+version runs out of memory), and an address above 16 MB ends with
+`runtime error: address out of range`. `make -C c lines` checks that every
+source line has at most 71 columns.
+
 ## Manual
 
 See [docs/PLM-User-Guide.docx](docs/PLM-User-Guide.docx) (34 pages): language, built-in procedures,

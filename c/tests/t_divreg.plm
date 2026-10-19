@@ -1,0 +1,5 @@
+T4: DO;
+DECLARE A BYTE, B BYTE;
+A = 5; B = 0;
+CALL PRNUM(7 / B);
+END T4;
